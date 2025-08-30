@@ -123,12 +123,13 @@ func handleCommand(bot *tgbotapi.BotAPI, update tgbotapi.Update, cfg *Config) {
 		confPath, err := createClientConf(args, cfg)
 		if err != nil {
 			bot.Send(tgbotapi.NewMessage(update.Message.Chat.ID, fmt.Sprintf("Ошибка: %v", err)))
+			infoLog.Printf("[ERROR] Пользователь %d попытался создать клиента %s: %v", userID, args, err)
 		} else {
 			content, _ := os.ReadFile(confPath)
 			doc := tgbotapi.FileBytes{Name: args + ".conf", Bytes: content}
 			bot.Send(tgbotapi.NewDocument(update.Message.Chat.ID, doc))
+			infoLog.Printf("Пользователь %d создал клиента %s", userID, args)
 		}
-		infoLog.Printf("Пользователь %d создал клиента %s", userID, args)
 	}
 }
 
@@ -241,7 +242,7 @@ func getNextIP(cfg *Config) (string, error) {
 
 	for ip := ipnet.IP.Mask(ipnet.Mask); ipnet.Contains(ip); inc(ip) {
 		last := ip[3]
-		if last < 10 { // резервируем первые адреса
+		if last < 10 {
 			continue
 		}
 		candidate := fmt.Sprintf("%s/32", ip.String())
