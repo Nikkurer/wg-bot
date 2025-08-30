@@ -21,17 +21,21 @@ var (
 	logLevel string
 )
 
+
 func main() {
-	verbose := flag.Count("v", "уровень логирования (-v = info, -vv = debug)")
+	var verbose string
+	flag.StringVar(&verbose, "v", "", "уровень логирования: -v или -vv")
 	flag.Parse()
 
-	switch *verbose {
-	case 0:
+	switch verbose {
+	case "":
 		logLevel = "error"
-	case 1:
+	case "v":
 		logLevel = "info"
-	default:
+	case "vv":
 		logLevel = "debug"
+	default:
+		log.Fatalf("[ERROR] Неверный флаг логирования: %s", verbose)
 	}
 
 	infoLog = log.New(log.Writer(), "[INFO] ", log.Ldate|log.Ltime)
