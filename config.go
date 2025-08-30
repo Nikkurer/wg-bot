@@ -13,6 +13,7 @@ type Config struct {
 	ServerIP        string
 	ServerPublicKey string
 	WgSubnet        string
+	ClientDir       string
 }
 
 func LoadConfig() *Config {
@@ -32,10 +33,12 @@ func LoadConfig() *Config {
 		ServerIP:        os.Getenv("SERVER_IP"),
 		ServerPublicKey: os.Getenv("SERVER_PUBLIC_KEY"),
 		WgSubnet:        os.Getenv("WG_SUBNET"),
+		ClientDir:       os.Getenv("CLIENT_DIR"),
 	}
 
-	if cfg.TelegramToken == "" || cfg.WgInterface == "" || cfg.ServerIP == "" || cfg.ServerPublicKey == "" || cfg.WgSubnet == "" {
-		log.Fatal("[ERROR] Не заданы обязательные переменные окружения (TELEGRAM_TOKEN, WG_INTERFACE, SERVER_IP, SERVER_PUBLIC_KEY, WG_SUBNET, ALLOWED_USER)")
+	if cfg.TelegramToken == "" || cfg.WgInterface == "" || cfg.ServerIP == "" ||
+		cfg.ServerPublicKey == "" || cfg.WgSubnet == "" || cfg.ClientDir == "" {
+		log.Fatal("[ERROR] Не заданы обязательные переменные окружения (TELEGRAM_TOKEN, WG_INTERFACE, SERVER_IP, SERVER_PUBLIC_KEY, WG_SUBNET, ALLOWED_USER, CLIENT_DIR)")
 	}
 
 	return cfg

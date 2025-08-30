@@ -21,8 +21,6 @@ var (
 	logLevel string
 )
 
-// ---------------- Main ----------------
-
 func main() {
 	verbose := flag.Count("v", "уровень логирования (-v = info, -vv = debug)")
 	flag.Parse()
@@ -73,8 +71,6 @@ func main() {
 		}
 	}
 }
-
-// ---------------- Commands ----------------
 
 func handleCommand(bot *tgbotapi.BotAPI, update tgbotapi.Update, cfg *Config) {
 	userID := update.Message.From.ID
@@ -136,8 +132,6 @@ func handleCommand(bot *tgbotapi.BotAPI, update tgbotapi.Update, cfg *Config) {
 	}
 }
 
-// ---------------- Commands Helper ----------------
-
 func runCommand(name string, args ...string) (string, error) {
 	if logLevel == "debug" {
 		debugLog.Printf("Выполнена команда: %s %s", name, strings.Join(args, " "))
@@ -150,6 +144,13 @@ func runCommand(name string, args ...string) (string, error) {
 }
 
 func createClientConf(name string, cfg *Config) (string, error) {
+	// Проверка существования директории
+	if stat, err := os.Stat(cfg.ClientDir); os.IsNotExist(err) || !stat.IsDir() {
+		return "", fmt.Errorf("директория для клиентов не найдена: %s", cfg.ClientDir)
+	}
+
+	clientConfPath := fmt.Sprintf("%s/%s.conf", cfg.ClientDir, name)
+
 	// Генерация ключей
 	privKey, err := runCommand("wg", "genkey")
 	if err != nil {
@@ -174,13 +175,12 @@ func createClientConf(name string, cfg *Config) (string, error) {
 		return "", err
 	}
 
-	// Формирование конфигурации через шаблон
+	// Генерация конфига через шаблон
 	tpl, err := template.ParseFiles("client.conf.tpl")
 	if err != nil {
 		return "", fmt.Errorf("ошибка чтения шаблона: %v", err)
 	}
 
-	clientConfPath := fmt.Sprintf("/etc/wireguard/clients/%s.conf", name)
 	f, err := os.Create(clientConfPath)
 	if err != nil {
 		return "", err
