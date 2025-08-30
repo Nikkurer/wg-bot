@@ -6,14 +6,11 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
-)
-
-const (
-	wgInterface = "wg0"       // имя интерфейса WireGuard
-	allowedUser = 123456789   // ваш Telegram user ID
+	"github.com/joho/godotenv"
 )
 
 var (
@@ -33,6 +30,39 @@ func runCommand(cmd string, args ...string) string {
 	}
 	return string(out)
 }
+
+func loadConfig() (string, string, int64) {
+    err := godotenv.Load()
+    if err != nil {
+        log.Println("[INFO] .env файл не найден, используем переменные окружения")
+    }
+
+    token := os.Getenv("TELEGRAM_TOKEN")
+    if token == "" {
+        log.Fatal("[ERROR] Не задан TELEGRAM_TOKEN. Установите переменную окружения:")
+        log.Fatal("export TELEGRAM_TOKEN=ваш_токен_бота")
+    }
+
+    wgInterface := os.Getenv("WG_INTERFACE")
+    if wgInterface == "" {
+        wgInterface = "wg0" // значение по умолчанию
+    }
+
+    allowedUserStr := os.Getenv("ALLOWED_USER")
+    if allowedUserStr == "" {
+        log.Fatal("[ERROR] Не задан ALLOWED_USER в .env или переменной окружения")
+    }
+
+    allowedUserInt, err := strconv.Atoi(allowedUserStr)
+    if err != nil {
+        log.Fatalf("[ERROR] Неверный ALLOWED_USER: %v", err)
+    }
+
+    allowedUser := int64(allowedUserInt)
+
+    return token, wgInterface, allowedUser
+}
+
 
 func main() {
 	// Чтение ключей командной строки
@@ -54,22 +84,29 @@ func main() {
 
 	infoLog.Println("Запуск бота...")
 
-	token := os.Getenv("TELEGRAM_TOKEN")
-	if token == "" {
-		log.Fatal("Не задан TELEGRAM_TOKEN")
+	// Загружаем конфигурацию
+	token, wgInterface, allowedUser := loadConfig()
+	if logLevel == "debug" {
+		debugLog.Printf("Используемый TELEGRAM_TOKEN: %s, WG_INTERFACE: %s, ALLOWED_USER: %d\n", token, wgInterface, allowedUser)
 	}
 
+	// Создание бота
 	bot, err := tgbotapi.NewBotAPI(token)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("[ERROR] Ошибка при авторизации бота: %v\nПроверьте токен в TELEGRAM_TOKEN", err)
 	}
 
-	infoLog.Printf("Бот авторизован как: %s\n", bot.Self.UserName)
+	if bot.Self.UserName == "" {
+		log.Fatal("[ERROR] Бот не авторизован. Проверьте токен.")
+	}
+
+	infoLog.Printf("Бот авторизован как: %s", bot.Self.UserName)
 
 	u := tgbotapi.NewUpdate(0)
 	u.Timeout = 60
 	updates := bot.GetUpdatesChan(u)
 
+	// Цикл обработки сообщений
 	for update := range updates {
 		if update.Message == nil {
 			continue
