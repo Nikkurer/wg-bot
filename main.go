@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"bytes"
-	"flag"
 	"fmt"
 	"log"
 	"net"
@@ -13,6 +12,7 @@ import (
 	"text/template"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	flag "github.com/spf13/pflag"
 )
 
 var (
@@ -21,21 +21,17 @@ var (
 	logLevel string
 )
 
-
 func main() {
-	var verbose string
-	flag.StringVar(&verbose, "v", "", "уровень логирования: -v или -vv")
+	verbose := flag.CountP("verbose", "v", "уровень логирования: -v или -vv")
 	flag.Parse()
 
-	switch verbose {
-	case "":
+	switch *verbose {
+	case 0:
 		logLevel = "error"
-	case "v":
+	case 1:
 		logLevel = "info"
-	case "vv":
-		logLevel = "debug"
 	default:
-		log.Fatalf("[ERROR] Неверный флаг логирования: %s", verbose)
+		logLevel = "debug"
 	}
 
 	infoLog = log.New(log.Writer(), "[INFO] ", log.Ldate|log.Ltime)
@@ -174,13 +170,11 @@ func createClientConf(name string, cfg *Config) (string, error) {
 		return "", err
 	}
 
-	// Добавляем клиента на сервер
 	_, err = runCommand("sudo", "wg", "set", cfg.WgInterface, "peer", pubKey, "allowed-ips", fmt.Sprintf("%s/32", ip))
 	if err != nil {
 		return "", err
 	}
 
-	// Генерация конфига через шаблон
 	tpl, err := template.ParseFiles("client.conf.tpl")
 	if err != nil {
 		return "", fmt.Errorf("ошибка чтения шаблона: %v", err)
