@@ -1,7 +1,8 @@
 package main
 
 import (
-	"flag"
+	"bufio"
+	"fmt"
 	"log"
 	"os"
 	"os/exec"
@@ -12,89 +13,160 @@ import (
 	"github.com/joho/godotenv"
 )
 
-var (
-	logLevel string
-	infoLog  *log.Logger
-	debugLog *log.Logger
-)
-
-// runCommand выполняет команду и возвращает вывод, логируя только факт выполнения в debug
-func runCommand(cmd string, args ...string) (string, error) {
-	out, err := exec.Command(cmd, args...).CombinedOutput()
-
-	if logLevel == "debug" {
-		debugLog.Printf("Выполнена команда: %s %s | Ошибка: %v\n",
-			cmd, strings.Join(args, " "), err)
-	}
-
-	return string(out), err
+// Config структура
+type Config struct {
+	TelegramToken string
+	WgInterface   string
+	AllowedUser   int64
 }
 
-// loadConfig читает TELEGRAM_TOKEN, WG_INTERFACE и ALLOWED_USER из .env или переменных окружения
-func loadConfig() (string, string, int64) {
-	_ = godotenv.Load() // если .env нет, продолжаем
+// глобальные логгеры
+var (
+	infoLog  *log.Logger
+	debugLog *log.Logger
+	logLevel string
+)
 
-	token := os.Getenv("TELEGRAM_TOKEN")
-	if token == "" {
-		log.Fatal("[ERROR] Не задан TELEGRAM_TOKEN. Установите переменную окружения:")
-		log.Fatal("export TELEGRAM_TOKEN=ваш_токен_бота")
-	}
-
-	wgInterface := os.Getenv("WG_INTERFACE")
-	if wgInterface == "" {
-		wgInterface = "wg0"
-	}
-
-	allowedUserStr := os.Getenv("ALLOWED_USER")
-	if allowedUserStr == "" {
-		log.Fatal("[ERROR] Не задан ALLOWED_USER в .env или окружении")
-	}
-
-	allowedUserInt, err := strconv.Atoi(allowedUserStr)
+// загрузка конфига
+func loadConfig() (*Config, error) {
+	err := godotenv.Load()
 	if err != nil {
-		log.Fatalf("[ERROR] Неверный ALLOWED_USER: %v", err)
+		return nil, fmt.Errorf("ошибка загрузки .env: %v", err)
 	}
 
-	return token, wgInterface, int64(allowedUserInt)
+	allowedUser, err := strconv.ParseInt(os.Getenv("ALLOWED_USER"), 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("ошибка парсинга ALLOWED_USER: %v", err)
+	}
+
+	return &Config{
+		TelegramToken: os.Getenv("TELEGRAM_TOKEN"),
+		WgInterface:   os.Getenv("WG_INTERFACE"),
+		AllowedUser:   allowedUser,
+	}, nil
+}
+
+// запуск команд
+func runCommand(name string, args ...string) (string, error) {
+	cmd := exec.Command(name, args...)
+	output, err := cmd.CombinedOutput()
+	if logLevel == "debug" {
+		debugLog.Printf("Выполнена команда: %s %s", name, strings.Join(args, " "))
+	}
+	return string(output), err
+}
+
+// автоматический выбор IP
+func getNextIP() (string, error) {
+	file, err := os.Open("/etc/wireguard/clients/used_ips.txt")
+	if err != nil && !os.IsNotExist(err) {
+		return "", err
+	}
+	defer file.Close()
+
+	used := map[string]bool{}
+	if file != nil {
+		scanner := bufio.NewScanner(file)
+		for scanner.Scan() {
+			used[scanner.Text()] = true
+		}
+	}
+
+	base := "10.0.0."
+	for i := 2; i < 255; i++ {
+		ip := fmt.Sprintf("%s%d", base, i)
+		if !used[ip] {
+			f, _ := os.OpenFile("/etc/wireguard/clients/used_ips.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+			defer f.Close()
+			f.WriteString(ip + "\n")
+			return ip, nil
+		}
+	}
+	return "", fmt.Errorf("нет доступных IP")
+}
+
+// генерация клиента
+func createClientConf(clientName, wgInterface string) (string, error) {
+	os.MkdirAll("/etc/wireguard/clients", 0700)
+	clientConfPath := fmt.Sprintf("/etc/wireguard/clients/%s.conf", clientName)
+
+	privateKeyBytes, err := exec.Command("wg", "genkey").Output()
+	if err != nil {
+		return "", fmt.Errorf("ошибка генерации приватного ключа: %v", err)
+	}
+	privateKey := strings.TrimSpace(string(privateKeyBytes))
+
+	pubKeyCmd := exec.Command("wg", "pubkey")
+	pubKeyCmd.Stdin = strings.NewReader(privateKey)
+	pubKeyBytes, err := pubKeyCmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("ошибка генерации публичного ключа: %v", err)
+	}
+	publicKey := strings.TrimSpace(string(pubKeyBytes))
+
+	ip, err := getNextIP()
+	if err != nil {
+		return "", err
+	}
+
+	conf := fmt.Sprintf(`[Interface]
+PrivateKey = %s
+Address = %s/24
+DNS = 1.1.1.1
+
+[Peer]
+PublicKey = <SERVER_PUBLIC_KEY>
+Endpoint = <SERVER_IP>:51820
+AllowedIPs = 0.0.0.0/0, ::/0
+PersistentKeepalive = 25
+`, privateKey, ip)
+
+	err = os.WriteFile(clientConfPath, []byte(conf), 0600)
+	if err != nil {
+		return "", fmt.Errorf("ошибка сохранения конфига: %v", err)
+	}
+
+	_, err = runCommand("sudo", "wg", "set", wgInterface, "peer", publicKey, "allowed-ips", ip+"/32")
+	if err != nil {
+		return "", fmt.Errorf("ошибка добавления клиента на сервер: %v", err)
+	}
+
+	_, err = runCommand("sudo", "wg-quick", "save", wgInterface)
+	if err != nil {
+		return "", fmt.Errorf("ошибка сохранения wg0.conf: %v", err)
+	}
+
+	return clientConfPath, nil
 }
 
 func main() {
-	// Чтение ключей командной строки
-	v := flag.Bool("v", false, "уровень info")
-	vv := flag.Bool("vv", false, "уровень debug")
-	flag.Parse()
+	// логирование
+	for _, arg := range os.Args {
+		if arg == "-v" {
+			logLevel = "info"
+		}
+		if arg == "-vv" {
+			logLevel = "debug"
+		}
+	}
+	infoLog = log.New(os.Stdout, "[INFO] ", log.Ldate|log.Ltime)
+	debugLog = log.New(os.Stdout, "[DEBUG] ", log.Ldate|log.Ltime)
 
-	// Настройка логирования
-	if *vv {
-		logLevel = "debug"
-	} else if *v {
-		logLevel = "info"
-	} else {
-		logLevel = "none"
+	config, err := loadConfig()
+	if err != nil {
+		log.Fatalf("[ERROR] %v", err)
 	}
 
-	infoLog = log.New(os.Stdout, "[INFO] ", log.LstdFlags)
-	debugLog = log.New(os.Stdout, "[DEBUG] ", log.LstdFlags)
-
-	infoLog.Println("Запуск бота...")
-
-	// Загружаем конфиг
-	token, wgInterface, allowedUser := loadConfig()
 	if logLevel == "debug" {
-		debugLog.Printf("WG_INTERFACE: %s, ALLOWED_USER: %d\n", wgInterface, allowedUser)
-		debugLog.Printf("TELEGRAM_TOKEN: %s\n", token)
+		debugLog.Printf("Используемый TELEGRAM_TOKEN: %q", config.TelegramToken)
 	}
 
-	// Создание бота
-	bot, err := tgbotapi.NewBotAPI(token)
+	bot, err := tgbotapi.NewBotAPI(config.TelegramToken)
 	if err != nil {
 		log.Fatalf("[ERROR] Ошибка при авторизации бота: %v", err)
 	}
-	if bot.Self.UserName == "" {
-		log.Fatal("[ERROR] Бот не авторизован. Проверьте токен.")
-	}
 
-	infoLog.Printf("Бот авторизован как: %s", bot.Self.UserName)
+	infoLog.Println("Запуск бота...")
 
 	u := tgbotapi.NewUpdate(0)
 	u.Timeout = 60
@@ -106,53 +178,73 @@ func main() {
 		}
 
 		userID := update.Message.From.ID
-		if userID != allowedUser {
+		if userID != config.AllowedUser {
 			msg := tgbotapi.NewMessage(update.Message.Chat.ID, "⛔ Доступ запрещён")
 			bot.Send(msg)
 			continue
 		}
 
-		cmd := update.Message.Command()
-		switch cmd {
-		case "status":
-			out, _ := runCommand("sudo", "wg", "show")
+		if !update.Message.IsCommand() {
+			continue
+		}
 
-			if len(out) > 4000 {
-				out = out[:4000] + "\n...(output truncated)"
-			}
-
-			msg := tgbotapi.NewMessage(update.Message.Chat.ID, "📊 Статус:\n"+out)
+		switch update.Message.Command() {
+		case "help":
+			helpMsg := `🤖 Доступные команды:
+/status – показать статус WireGuard
+/up – поднять интерфейс
+/down – выключить интерфейс
+/newclient <имя> – создать нового клиента WireGuard
+/help – показать это сообщение`
+			msg := tgbotapi.NewMessage(update.Message.Chat.ID, helpMsg)
 			bot.Send(msg)
+			infoLog.Printf("Пользователь %d вызвал /help", userID)
 
-			if logLevel == "info" || logLevel == "debug" {
-				infoLog.Printf("Выполнена команда /status пользователем %d", userID)
+		case "status":
+			_, err := runCommand("sudo", "wg", "show")
+			if err != nil {
+				bot.Send(tgbotapi.NewMessage(update.Message.Chat.ID, "Ошибка получения статуса"))
+			} else {
+				bot.Send(tgbotapi.NewMessage(update.Message.Chat.ID, "✅ WireGuard работает"))
 			}
+			infoLog.Printf("Пользователь %d вызвал /status", userID)
 
 		case "up":
-			out, _ := runCommand("sudo", "wg-quick", "up", wgInterface)
-			msg := tgbotapi.NewMessage(update.Message.Chat.ID, "✅ Интерфейс поднят\n"+out)
-			bot.Send(msg)
-			if logLevel == "info" || logLevel == "debug" {
-				infoLog.Printf("Выполнена команда /up пользователем %d", userID)
+			_, err := runCommand("sudo", "wg-quick", "up", config.WgInterface)
+			if err != nil {
+				bot.Send(tgbotapi.NewMessage(update.Message.Chat.ID, "Ошибка включения интерфейса"))
+			} else {
+				bot.Send(tgbotapi.NewMessage(update.Message.Chat.ID, "✅ Интерфейс поднят"))
 			}
+			infoLog.Printf("Пользователь %d вызвал /up", userID)
 
 		case "down":
-			out, _ := runCommand("sudo", "wg-quick", "down", wgInterface)
-			msg := tgbotapi.NewMessage(update.Message.Chat.ID, "⛔ Интерфейс выключен\n"+out)
-			bot.Send(msg)
-			if logLevel == "info" || logLevel == "debug" {
-				infoLog.Printf("Выполнена команда /down пользователем %d", userID)
+			_, err := runCommand("sudo", "wg-quick", "down", config.WgInterface)
+			if err != nil {
+				bot.Send(tgbotapi.NewMessage(update.Message.Chat.ID, "Ошибка выключения интерфейса"))
+			} else {
+				bot.Send(tgbotapi.NewMessage(update.Message.Chat.ID, "✅ Интерфейс выключен"))
+			}
+			infoLog.Printf("Пользователь %d вызвал /down", userID)
+
+		case "newclient":
+			args := update.Message.CommandArguments()
+			if args == "" {
+				bot.Send(tgbotapi.NewMessage(update.Message.Chat.ID, "⚠ Укажите имя клиента: /newclient <имя>"))
+				continue
 			}
 
-		default:
-			if strings.HasPrefix(update.Message.Text, "/") {
-				msg := tgbotapi.NewMessage(update.Message.Chat.ID,
-					"Команды:\n/status — показать статус\n/up — поднять wg0\n/down — выключить wg0")
-				bot.Send(msg)
-				if logLevel == "debug" {
-					debugLog.Printf("Неизвестная команда: %s | Пользователь: %d", cmd, userID)
-				}
+			path, err := createClientConf(args, config.WgInterface)
+			if err != nil {
+				bot.Send(tgbotapi.NewMessage(update.Message.Chat.ID, fmt.Sprintf("Ошибка: %v", err)))
+				continue
 			}
+
+			fileBytes, _ := os.ReadFile(path)
+			doc := tgbotapi.FileBytes{Name: args + ".conf", Bytes: fileBytes}
+			bot.Send(tgbotapi.NewDocument(update.Message.Chat.ID, doc))
+
+			infoLog.Printf("Пользователь %d создал нового клиента %s", userID, args)
 		}
 	}
 }
