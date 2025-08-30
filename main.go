@@ -2,7 +2,6 @@ package main
 
 import (
 	"flag"
-	"fmt"
 	"log"
 	"os"
 	"os/exec"
@@ -19,50 +18,45 @@ var (
 	debugLog *log.Logger
 )
 
-// runCommand выполняет системную команду и возвращает вывод
-func runCommand(cmd string, args ...string) string {
+// runCommand выполняет команду и возвращает вывод, логируя только факт выполнения в debug
+func runCommand(cmd string, args ...string) (string, error) {
 	out, err := exec.Command(cmd, args...).CombinedOutput()
+
 	if logLevel == "debug" {
-		debugLog.Printf("Выполнена команда: %s %s\nВывод: %s\nОшибка: %v\n", cmd, strings.Join(args, " "), string(out), err)
+		debugLog.Printf("Выполнена команда: %s %s | Ошибка: %v\n",
+			cmd, strings.Join(args, " "), err)
 	}
-	if err != nil {
-		return fmt.Sprintf("Ошибка: %v\n%s", err, string(out))
-	}
-	return string(out)
+
+	return string(out), err
 }
 
+// loadConfig читает TELEGRAM_TOKEN, WG_INTERFACE и ALLOWED_USER из .env или переменных окружения
 func loadConfig() (string, string, int64) {
-    err := godotenv.Load()
-    if err != nil {
-        log.Println("[INFO] .env файл не найден, используем переменные окружения")
-    }
+	_ = godotenv.Load() // если .env нет, продолжаем
 
-    token := os.Getenv("TELEGRAM_TOKEN")
-    if token == "" {
-        log.Fatal("[ERROR] Не задан TELEGRAM_TOKEN. Установите переменную окружения:")
-        log.Fatal("export TELEGRAM_TOKEN=ваш_токен_бота")
-    }
+	token := os.Getenv("TELEGRAM_TOKEN")
+	if token == "" {
+		log.Fatal("[ERROR] Не задан TELEGRAM_TOKEN. Установите переменную окружения:")
+		log.Fatal("export TELEGRAM_TOKEN=ваш_токен_бота")
+	}
 
-    wgInterface := os.Getenv("WG_INTERFACE")
-    if wgInterface == "" {
-        wgInterface = "wg0" // значение по умолчанию
-    }
+	wgInterface := os.Getenv("WG_INTERFACE")
+	if wgInterface == "" {
+		wgInterface = "wg0"
+	}
 
-    allowedUserStr := os.Getenv("ALLOWED_USER")
-    if allowedUserStr == "" {
-        log.Fatal("[ERROR] Не задан ALLOWED_USER в .env или переменной окружения")
-    }
+	allowedUserStr := os.Getenv("ALLOWED_USER")
+	if allowedUserStr == "" {
+		log.Fatal("[ERROR] Не задан ALLOWED_USER в .env или окружении")
+	}
 
-    allowedUserInt, err := strconv.Atoi(allowedUserStr)
-    if err != nil {
-        log.Fatalf("[ERROR] Неверный ALLOWED_USER: %v", err)
-    }
+	allowedUserInt, err := strconv.Atoi(allowedUserStr)
+	if err != nil {
+		log.Fatalf("[ERROR] Неверный ALLOWED_USER: %v", err)
+	}
 
-    allowedUser := int64(allowedUserInt)
-
-    return token, wgInterface, allowedUser
+	return token, wgInterface, int64(allowedUserInt)
 }
-
 
 func main() {
 	// Чтение ключей командной строки
@@ -84,18 +78,18 @@ func main() {
 
 	infoLog.Println("Запуск бота...")
 
-	// Загружаем конфигурацию
+	// Загружаем конфиг
 	token, wgInterface, allowedUser := loadConfig()
 	if logLevel == "debug" {
-		debugLog.Printf("Используемый TELEGRAM_TOKEN: %s, WG_INTERFACE: %s, ALLOWED_USER: %d\n", token, wgInterface, allowedUser)
+		debugLog.Printf("WG_INTERFACE: %s, ALLOWED_USER: %d\n", wgInterface, allowedUser)
+		debugLog.Printf("TELEGRAM_TOKEN: %s\n", token)
 	}
 
 	// Создание бота
 	bot, err := tgbotapi.NewBotAPI(token)
 	if err != nil {
-		log.Fatalf("[ERROR] Ошибка при авторизации бота: %v\nПроверьте токен в TELEGRAM_TOKEN", err)
+		log.Fatalf("[ERROR] Ошибка при авторизации бота: %v", err)
 	}
-
 	if bot.Self.UserName == "" {
 		log.Fatal("[ERROR] Бот не авторизован. Проверьте токен.")
 	}
@@ -106,7 +100,6 @@ func main() {
 	u.Timeout = 60
 	updates := bot.GetUpdatesChan(u)
 
-	// Цикл обработки сообщений
 	for update := range updates {
 		if update.Message == nil {
 			continue
@@ -122,30 +115,33 @@ func main() {
 		cmd := update.Message.Command()
 		switch cmd {
 		case "status":
-			out := runCommand("wg", "show")
-			msg := tgbotapi.NewMessage(update.Message.Chat.ID, "📊 Статус:\n"+out)
-			if len(msg.Text) > 4000 {
-				msg.Text = msg.Text[:4000] + "\n...(output truncated)"
+			out, _ := runCommand("sudo", "wg", "show")
+
+			if len(out) > 4000 {
+				out = out[:4000] + "\n...(output truncated)"
 			}
+
+			msg := tgbotapi.NewMessage(update.Message.Chat.ID, "📊 Статус:\n"+out)
 			bot.Send(msg)
+
 			if logLevel == "info" || logLevel == "debug" {
-				infoLog.Println("Выполнена команда /status")
+				infoLog.Printf("Выполнена команда /status пользователем %d", userID)
 			}
 
 		case "up":
-			out := runCommand("wg-quick", "up", wgInterface)
+			out, _ := runCommand("sudo", "wg-quick", "up", wgInterface)
 			msg := tgbotapi.NewMessage(update.Message.Chat.ID, "✅ Интерфейс поднят\n"+out)
 			bot.Send(msg)
 			if logLevel == "info" || logLevel == "debug" {
-				infoLog.Println("Выполнена команда /up")
+				infoLog.Printf("Выполнена команда /up пользователем %d", userID)
 			}
 
 		case "down":
-			out := runCommand("wg-quick", "down", wgInterface)
+			out, _ := runCommand("sudo", "wg-quick", "down", wgInterface)
 			msg := tgbotapi.NewMessage(update.Message.Chat.ID, "⛔ Интерфейс выключен\n"+out)
 			bot.Send(msg)
 			if logLevel == "info" || logLevel == "debug" {
-				infoLog.Println("Выполнена команда /down")
+				infoLog.Printf("Выполнена команда /down пользователем %d", userID)
 			}
 
 		default:
@@ -154,7 +150,7 @@ func main() {
 					"Команды:\n/status — показать статус\n/up — поднять wg0\n/down — выключить wg0")
 				bot.Send(msg)
 				if logLevel == "debug" {
-					debugLog.Printf("Неизвестная команда: %s\n", cmd)
+					debugLog.Printf("Неизвестная команда: %s | Пользователь: %d", cmd, userID)
 				}
 			}
 		}
