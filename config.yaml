@@ -1,0 +1,10 @@
+# config.yaml — пример конфигурации
+WG_INTERFACE: wg0
+SERVER_IP: "198.51.100.X"            # внешний IP сервера (используется в клиентских конфиг. Не обязательно)
+CLIENT_DIR: "/etc/wireguard/clients" # каталог для хранения клиентских конфигов и метаданных
+WG_SUBNET: "10.10.0.0/24"            # сеть WireGuard
+SERVER_PUBLIC_KEY: "AAAAB3NzaC1..."  # публичный ключ сервера (опционально, для клиента)
+TELEGRAM_TOKEN: "123456:ABC-DEF..."  # Telegram bot token
+ALLOWED_USERS:
+  - 123456789                        # id пользователя Telegram, которому разрешён доступ
+  - 987654321
