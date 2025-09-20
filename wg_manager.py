@@ -4,6 +4,7 @@ import subprocess
 import ipaddress
 import json
 import stat
+import tempfile
 
 class WGManagerError(Exception):
     pass
@@ -14,15 +15,16 @@ class WGManager:
         self.client_dir = client_dir
         self.wg_subnet = ipaddress.ip_network(wg_subnet)
         self.server_public_key = server_public_key
+
+        # Проверка каталога
         os.makedirs(self.client_dir, exist_ok=True)
         st = os.stat(self.client_dir)
-        if st.st_uid != uid:  # или ожидаемый uid
-            raise WGManagerError("CLIENT_DIR must be owned by root")
-        if (st.st_mode & 0o077) != uid:
+        if st.st_uid != uid:
+            raise WGManagerError(f"CLIENT_DIR must be owned by UID {uid}")
+        if st.st_mode & 0o077:
             raise WGManagerError("CLIENT_DIR must not be group/other writable")
 
-
-    # --- helper subprocess wrapper (avoid logging secrets) ---
+    # --- helper subprocess wrapper ---
     def _run(self, cmd, input_data=None, check=True):
         """Run subprocess and return stdout (text). Raises WGManagerError on failure."""
         try:
@@ -32,7 +34,7 @@ class WGManager:
                 capture_output=True,
                 check=check,
                 text=True,
-                env=os.environ
+                env={"PATH": "/usr/bin:/bin"}
             )
             return proc.stdout.strip()
         except subprocess.CalledProcessError as e:
@@ -71,6 +73,32 @@ class WGManager:
         pub = proc.stdout.strip()
         return priv.strip(), pub.strip()
 
+    # --- helper: atomic write ---
+    def _atomic_write(self, path, data, mode=0o600):
+        """Атомарная запись файла
+
+        Args:
+            path (str): Путь до файлв
+            data (str): Данные для записи
+            mode (int, optional): Права на файл. По умоланию 0o600.
+
+        Raises:
+            WGManagerError: Ошибка при записи файла
+        """
+        if os.path.exists(path) and os.path.islink(path):
+            raise WGManagerError("Refusing to overwrite symlink")
+        dir_name = os.path.dirname(path)
+        base_name = os.path.basename(path)
+        fd, tmp_path = tempfile.mkstemp(prefix=base_name, dir=dir_name, text=True)
+        try:
+            with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                f.write(data)
+            os.chmod(tmp_path, mode)
+            os.replace(tmp_path, path)
+        except Exception:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+            raise
 
     # --- find next free IP ---
     def _list_used_ips(self):
@@ -113,8 +141,7 @@ class WGManager:
 
     # --- add client ---
     def add_client(self, name, allowed_ips=None):
-        # name: simple filename-safe string
-        if not name or any(ch in name for ch in r"\/:*?\"<>| "):
+        if not name or any(ch not in "abcdefghijklmnopqrstuvwxyz0123456789_-" for ch in name.lower()):
             raise WGManagerError("Invalid client name")
         meta_path = os.path.join(self.client_dir, f"{name}.json")
         conf_path = os.path.join(self.client_dir, f"{name}.conf")
@@ -126,44 +153,43 @@ class WGManager:
         if not allowed_ips:
             allowed_ips = "0.0.0.0/0"
 
-        # add peer to live interface (requires root)
+        added_peer = False
         try:
+            # добавляем пир в интерфейс
             self._run(["wg", "set", self.wg_iface, "peer", pub, "allowed-ips", client_ip.split("/")[0] + "/32"])
-        except WGManagerError as e:
-            # try to not leave private data lingering
-            raise WGManagerError(f"Failed to add peer to interface: {e}")
+            added_peer = True
 
-        # build client config (do not log priv)
-        server_pub = self.server_public_key or "<SERVER_PUBLIC_KEY>"
-        server_ip = ""  # user can put actual endpoint later
-        client_conf = [
-            "[Interface]",
-            f"PrivateKey = {priv}",
-            f"Address = {client_ip}",
-            "DNS = 1.1.1.1",
-            "",
-            "[Peer]",
-            f"PublicKey = {server_pub}",
-            "AllowedIPs = 0.0.0.0/0",
-        ]
-        client_conf_text = "\n".join(client_conf)
+            server_pub = self.server_public_key or "<SERVER_PUBLIC_KEY>"
+            client_conf = [
+                "[Interface]",
+                f"PrivateKey = {priv}",
+                f"Address = {client_ip}",
+                "DNS = 1.1.1.1",
+                "",
+                "[Peer]",
+                f"PublicKey = {server_pub}",
+                f"AllowedIPs = {allowed_ips}",
+            ]
+            client_conf_text = "\n".join(client_conf)
 
-        # write files with restricted permissions
-        with open(conf_path, "w", encoding="utf-8") as f:
-            f.write(client_conf_text)
-        os.chmod(conf_path, stat.S_IRUSR | stat.S_IWUSR)  # 600
+            # atomic write файлов
+            self._atomic_write(conf_path, client_conf_text, mode=0o600)
+            meta = {
+                "name": name,
+                "client_ip": client_ip,
+                "pubkey": pub,
+                "conf_path": conf_path,
+            }
+            self._atomic_write(meta_path, json.dumps(meta, indent=2), mode=0o600)
 
-        meta = {
-            "name": name,
-            "client_ip": client_ip,
-            "pubkey": pub,
-            "conf_path": conf_path,
-        }
-        with open(meta_path, "w", encoding="utf-8") as f:
-            json.dump(meta, f, indent=2)
-        os.chmod(meta_path, stat.S_IRUSR | stat.S_IWUSR)
+        except Exception as e:
+            if added_peer:
+                try:
+                    self._run(["wg", "set", self.wg_iface, "peer", pub, "remove"])
+                except Exception:
+                    pass
+            raise WGManagerError(f"Failed to add client '{name}': {e}")
 
-        # Return non-sensitive info and full client config for delivery to user
         return {
             "name": name,
             "client_ip": client_ip,
@@ -181,18 +207,17 @@ class WGManager:
             meta = json.load(f)
         pub = meta.get("pubkey")
         conf_path = meta.get("conf_path")
-        # remove peer from live interface
         try:
             self._run(["wg", "set", self.wg_iface, "peer", pub, "remove"])
         except WGManagerError as e:
-            # still proceed to cleanup files (logically)
             raise WGManagerError(f"Failed to remove peer from interface: {e}")
-        # remove files
+
+        # удалить файлы
         try:
             if conf_path and os.path.exists(conf_path):
                 os.remove(conf_path)
             os.remove(meta_path)
         except Exception as e:
-            # non-fatal cleanup error
             raise WGManagerError(f"Failed to remove client files: {e}")
+
         return True
