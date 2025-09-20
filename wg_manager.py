@@ -16,8 +16,10 @@ class WGManager:
         self.server_public_key = server_public_key
         os.makedirs(self.client_dir, exist_ok=True)
         st = os.stat(self.client_dir)
-        if st.st_uid != uid or (st.st_mode & 0o077):
-            raise WGManagerError("Unsafe CLIENT_DIR ownership or permissions; must be owned by root and mode 0700")
+        if st.st_uid != uid:  # или ожидаемый uid
+            raise WGManagerError("CLIENT_DIR must be owned by root")
+        if (st.st_mode & 0o077) != uid:
+            raise WGManagerError("CLIENT_DIR must not be group/other writable")
 
 
     # --- helper subprocess wrapper (avoid logging secrets) ---
