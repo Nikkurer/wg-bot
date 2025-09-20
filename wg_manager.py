@@ -30,7 +30,13 @@ class WGManager:
             )
             return proc.stdout.strip()
         except subprocess.CalledProcessError as e:
-            raise WGManagerError(f"Command failed: {' '.join(cmd)}; exit={e.returncode}; stderr={e.stderr.strip()}")
+            # redact stderr before storing into the exception message
+            safe_err = "Что-то пошло не так. Напиши админу" if e.stderr else "Упс. Не понял что произошло - напиши админу."
+            # store stderr in debug-only attribute, not in the message
+            ex = WGManagerError(f"Command failed: {' '.join(cmd)}; exit={e.returncode}; stderr={safe_err}")
+            # attach full stderr for admin logs only
+            ex._full_stderr = e.stderr
+            raise ex
 
     # --- status ---
     def status(self):
@@ -54,8 +60,11 @@ class WGManager:
     # --- key generation ---
     def _gen_keypair(self):
         priv = self._run(["wg", "genkey"])
-        pub = self._run(["bash", "-c", f"echo '{priv}' | wg pubkey"])
+        # use subprocess.run without shell
+        proc = subprocess.run(["wg", "pubkey"], input=priv + "\n", capture_output=True, text=True, check=True)
+        pub = proc.stdout.strip()
         return priv.strip(), pub.strip()
+
 
     # --- find next free IP ---
     def _list_used_ips(self):
