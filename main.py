@@ -38,7 +38,7 @@ def setup_logging(verbosity):
     debugLog.propagate = True
 
 # --- Config loader ---
-REQUIRED_KEYS = ["WG_INTERFACE", "CLIENT_DIR", "WG_SUBNET", "TELEGRAM_TOKEN", "ALLOWED_USERS"]
+REQUIRED_KEYS = ["WG_INTERFACE", "CLIENT_DIR", "WG_SUBNET", "TELEGRAM_TOKEN", "ALLOWED_USERS", "BOT_USER"]
 
 def LoadConfig(path):
     if not os.path.exists(path):
@@ -177,7 +177,7 @@ async def main():
 
     infoLog.info(f"Config loaded. WG={cfg['WG_INTERFACE']} DIR={cfg['CLIENT_DIR']} SUBNET={cfg['WG_SUBNET']} TOKEN={mask_secret(cfg['TELEGRAM_TOKEN'])}")
 
-    wg = WGManager(cfg["WG_INTERFACE"], cfg["CLIENT_DIR"], cfg["WG_SUBNET"], cfg.get("SERVER_PUBLIC_KEY"))
+    wg = WGManager(cfg["WG_INTERFACE"], cfg["CLIENT_DIR"], cfg["WG_SUBNET"], cfg.get("SERVER_PUBLIC_KEY"), cfg.get("BOT_USER"))
     bot = Bot(token=cfg["TELEGRAM_TOKEN"])
     dp = Dispatcher()
 

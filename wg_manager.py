@@ -9,12 +9,16 @@ class WGManagerError(Exception):
     pass
 
 class WGManager:
-    def __init__(self, wg_iface, client_dir, wg_subnet, server_public_key=None):
+    def __init__(self, wg_iface, client_dir, wg_subnet, server_public_key=None, uid=0):
         self.wg_iface = wg_iface
         self.client_dir = client_dir
         self.wg_subnet = ipaddress.ip_network(wg_subnet)
         self.server_public_key = server_public_key
         os.makedirs(self.client_dir, exist_ok=True)
+        st = os.stat(self.client_dir)
+        if st.st_uid != uid or (st.st_mode & 0o077):
+            raise WGManagerError("Unsafe CLIENT_DIR ownership or permissions; must be owned by root and mode 0700")
+
 
     # --- helper subprocess wrapper (avoid logging secrets) ---
     def _run(self, cmd, input_data=None, check=True):
