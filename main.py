@@ -135,7 +135,8 @@ async def cmd_addclient(message: Message, command: CommandObject, cfg, wg: WGMan
         await message.answer_photo(photo=bio, caption=f"QR для клиента '{name}'")
 
     except WGManagerError as e:
-        await message.answer(f"Failed: {e}")
+        infoLog.error("WGManagerError: %s", getattr(e, "_full_stderr", str(e)))  # подробности только в лог
+        await message.answer("Операция не выполнена (внутренняя ошибка). Администратор уведомлен.")
     except Exception as e:
         infoLog.error(f"Unexpected error: {traceback.format_exc()}")
         await message.answer(f"Unexpected error: {e}")
@@ -153,7 +154,8 @@ async def cmd_removeclient(message: Message, command: CommandObject, cfg, wg: WG
         infoLog.info(f"Removed client '{name}' by {message.from_user.id}")
         await message.answer(f"Client '{name}' removed.")
     except WGManagerError as e:
-        await message.answer(f"Failed: {e}")
+        infoLog.error("WGManagerError: %s", getattr(e, "_full_stderr", str(e)))  # подробности только в лог
+        await message.answer("Операция не выполнена (внутренняя ошибка). Администратор уведомлен.")
     except Exception as e:
         infoLog.error(f"Unexpected error: {traceback.format_exc()}")
         await message.answer(f"Unexpected error: {e}")
