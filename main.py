@@ -1,16 +1,16 @@
 # main.py
 import argparse
 import logging
-import os
 import sys
 import yaml
 import traceback
 import io
 import asyncio
 import qrcode
-from aiogram.types import BotCommand
+import os
+
 from aiogram import Bot, Dispatcher
-from aiogram.types import Message
+from aiogram.types import Message, BotCommand
 from aiogram.filters import Command, CommandObject
 
 from wg_manager import WGManager, WGManagerError
@@ -22,7 +22,8 @@ debugLog = logging.getLogger("wg_bot_debug")
 def setup_logging(verbosity):
     root = logging.getLogger()
     root.setLevel(logging.DEBUG if verbosity >= 2 else (logging.INFO if verbosity == 1 else logging.WARNING))
-    formatter = logging.Formatter(fmt="%(asctime)s [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+    formatter = logging.Formatter(fmt="%(asctime)s [%(levelname)s] %(message)s",
+                                  datefmt="%Y-%m-%d %H:%M:%S")
 
     ch_info = logging.StreamHandler(sys.stdout)
     ch_info.setLevel(logging.INFO)
@@ -38,10 +39,10 @@ def setup_logging(verbosity):
     debugLog.propagate = True
 
 # --- Config loader ---
-REQUIRED_KEYS = ["WG_INTERFACE", "CLIENT_DIR", "WG_SUBNET", "TELEGRAM_TOKEN", "ALLOWED_USERS", "BOT_USER"]
+REQUIRED_KEYS = ["WG_INTERFACE", "CLIENT_DIR", "WG_SUBNET", "TELEGRAM_TOKEN", "ALLOWED_USERS"]
 
 def LoadConfig(path):
-    if not os.path.exists(path):
+    if not path or not os.path.exists(path):
         raise FileNotFoundError(f"Config file not found: {path}")
     with open(path, "r", encoding="utf-8") as f:
         cfg = yaml.safe_load(f) or {}
@@ -66,7 +67,7 @@ def mask_secret(s, keep=4):
 def user_allowed(cfg, user_id):
     return user_id in cfg["ALLOWED_USERS"]
 
-async def register_bot_commands(bot):
+async def register_bot_commands(bot: Bot):
     commands = [
         BotCommand(command="status", description="Показать статус WireGuard"),
         BotCommand(command="addclient", description="Добавить нового клиента"),
@@ -113,14 +114,14 @@ async def cmd_addclient(message: Message, command: CommandObject, cfg, wg: WGMan
         res = wg.add_client(name)
         infoLog.info(f"Added client '{name}' by {message.from_user.id}")
 
-        # 1. Отправляем .conf как файл
+        # Отправляем .conf как файл
         await message.answer_document(
             document=open(res["conf_path"], "rb"),
             filename=f"{name}.conf",
             caption=f"Client '{name}' created with IP {res['client_ip']}"
         )
 
-        # 2. Генерируем QR-код из текста конфига
+        # Генерируем QR-код из текста конфига
         qr = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_Q)
         qr.add_data(res["client_conf"])
         qr.make(fit=True)
@@ -131,7 +132,7 @@ async def cmd_addclient(message: Message, command: CommandObject, cfg, wg: WGMan
         img.save(bio, "PNG")
         bio.seek(0)
 
-        # 3. Отправляем QR-код как фото
+        # Отправляем QR-код как фото
         await message.answer_photo(photo=bio, caption=f"QR для клиента '{name}'")
 
     except WGManagerError as e:
@@ -177,7 +178,7 @@ async def main():
 
     infoLog.info(f"Config loaded. WG={cfg['WG_INTERFACE']} DIR={cfg['CLIENT_DIR']} SUBNET={cfg['WG_SUBNET']} TOKEN={mask_secret(cfg['TELEGRAM_TOKEN'])}")
 
-    wg = WGManager(cfg["WG_INTERFACE"], cfg["CLIENT_DIR"], cfg["WG_SUBNET"], cfg.get("SERVER_PUBLIC_KEY"), cfg.get("BOT_USER"))
+    wg = WGManager(cfg["WG_INTERFACE"], cfg["CLIENT_DIR"], cfg["WG_SUBNET"], cfg.get("SERVER_PUBLIC_KEY"))
     bot = Bot(token=cfg["TELEGRAM_TOKEN"])
     dp = Dispatcher()
 
@@ -186,7 +187,7 @@ async def main():
     dp.message.register(lambda m, c: cmd_addclient(m, c, cfg, wg), Command("addclient"))
     dp.message.register(lambda m, c: cmd_removeclient(m, c, cfg, wg), Command("removeclient"))
 
-    # 👇 Регистрируем команды в Telegram API
+    # Регистрируем команды в Telegram API
     await register_bot_commands(bot)
 
     infoLog.info("Bot starting...")

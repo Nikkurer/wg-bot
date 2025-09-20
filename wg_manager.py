@@ -3,19 +3,18 @@ import os
 import subprocess
 import ipaddress
 import json
-import stat
 import tempfile
 
 class WGManagerError(Exception):
     pass
 
 class WGManager:
-    def __init__(self, wg_iface, client_dir, wg_subnet, server_public_key=None, uid=0):
+    def __init__(self, wg_iface, client_dir, wg_subnet, server_public_key=None):
         self.wg_iface = wg_iface
         self.client_dir = client_dir
         self.wg_subnet = ipaddress.ip_network(wg_subnet)
         self.server_public_key = server_public_key
-
+        uid = os.getuid()
         # Проверка каталога
         os.makedirs(self.client_dir, exist_ok=True)
         st = os.stat(self.client_dir)
