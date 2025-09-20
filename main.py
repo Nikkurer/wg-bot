@@ -5,12 +5,15 @@ import os
 import sys
 import yaml
 import traceback
-
-from wg_manager import WGManager, WGManagerError
-
-from aiogram import Bot, Dispatcher, F
+import io
+import asyncio
+import qrcode
+from aiogram.types import BotCommand
+from aiogram import Bot, Dispatcher
 from aiogram.types import Message
 from aiogram.filters import Command, CommandObject
+
+from wg_manager import WGManager, WGManagerError
 
 # --- Logging setup ---
 infoLog = logging.getLogger("wg_bot_info")
@@ -63,6 +66,15 @@ def mask_secret(s, keep=4):
 def user_allowed(cfg, user_id):
     return user_id in cfg["ALLOWED_USERS"]
 
+async def register_bot_commands(bot):
+    commands = [
+        BotCommand(command="status", description="Показать статус WireGuard"),
+        BotCommand(command="addclient", description="Добавить нового клиента"),
+        BotCommand(command="removeclient", description="Удалить клиента"),
+        BotCommand(command="help", description="Справка по командам"),
+    ]
+    await bot.set_my_commands(commands)
+
 # --- Handlers ---
 async def cmd_help(message: Message, cfg, wg: WGManager):
     if not user_allowed(cfg, message.from_user.id):
@@ -100,11 +112,28 @@ async def cmd_addclient(message: Message, command: CommandObject, cfg, wg: WGMan
     try:
         res = wg.add_client(name)
         infoLog.info(f"Added client '{name}' by {message.from_user.id}")
+
+        # 1. Отправляем .conf как файл
         await message.answer_document(
             document=open(res["conf_path"], "rb"),
             filename=f"{name}.conf",
             caption=f"Client '{name}' created with IP {res['client_ip']}"
         )
+
+        # 2. Генерируем QR-код из текста конфига
+        qr = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_Q)
+        qr.add_data(res["client_conf"])
+        qr.make(fit=True)
+        img = qr.make_image(fill_color="black", back_color="white")
+
+        bio = io.BytesIO()
+        bio.name = f"{name}.png"
+        img.save(bio, "PNG")
+        bio.seek(0)
+
+        # 3. Отправляем QR-код как фото
+        await message.answer_photo(photo=bio, caption=f"QR для клиента '{name}'")
+
     except WGManagerError as e:
         await message.answer(f"Failed: {e}")
     except Exception as e:
@@ -130,7 +159,7 @@ async def cmd_removeclient(message: Message, command: CommandObject, cfg, wg: WG
         await message.answer(f"Unexpected error: {e}")
 
 # --- main ---
-def main():
+async def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("-c", "--config", default="config.yaml")
     parser.add_argument("-v", action="count", default=0)
@@ -155,8 +184,11 @@ def main():
     dp.message.register(lambda m, c: cmd_addclient(m, c, cfg, wg), Command("addclient"))
     dp.message.register(lambda m, c: cmd_removeclient(m, c, cfg, wg), Command("removeclient"))
 
+    # 👇 Регистрируем команды в Telegram API
+    await register_bot_commands(bot)
+
     infoLog.info("Bot starting...")
-    dp.run_polling(bot)
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
