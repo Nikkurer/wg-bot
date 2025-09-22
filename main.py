@@ -10,7 +10,7 @@ import qrcode
 import os
 
 from aiogram import Bot, Dispatcher
-from aiogram.types import Message, BotCommand
+from aiogram.types import Message, BotCommand, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, F
 from aiogram.filters import Command, CommandObject
 
 from wg_manager import WGManager, WGManagerError
@@ -78,6 +78,27 @@ async def register_bot_commands(bot: Bot):
     await bot.set_my_commands(commands)
 
 # --- Handlers ---
+async def cb_stats(callback: CallbackQuery, cfg, wg: WGManager):
+    if not user_allowed(cfg, callback.from_user.id):
+        await callback.answer("Access denied.", show_alert=True)
+        return
+
+    try:
+        name = callback.data.split(":", 1)[1]
+        stats = wg.peer_stats(name)
+        text = (
+            f"📊 Статистика для {name}:\n\n"
+            f"Endpoint: {stats['endpoint']}\n"
+            f"Allowed IPs: {stats['allowed_ips']}\n"
+            f"Handshake: {stats['latest_handshake']}\n"
+            f"RX: {stats['rx_bytes']} bytes\n"
+            f"TX: {stats['tx_bytes']} bytes\n"
+        )
+        await callback.message.answer(text)
+        await callback.answer()  # убираем "часики"
+    except Exception as e:
+        await callback.answer(f"Ошибка: {e}", show_alert=True)
+
 async def cmd_help(message: Message, cfg, wg: WGManager):
     if not user_allowed(cfg, message.from_user.id):
         infoLog.info(f"Denied access for user {message.from_user.id}")
@@ -172,11 +193,15 @@ async def cmd_listclients(message: Message, cfg, wg: WGManager):
             await message.answer("Нет клиентов.")
             return
 
-        text = "Клиенты WireGuard:\n\n"
         for c in clients:
-            text += f"• {c['name']} — {c['ip']} (pubkey: {c['pubkey'][:8]}...)\n"
+            text = f"• {c['name']} — {c['ip']} (pubkey: {c['pubkey'][:8]}...)\n"
+            kb = InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text="📊 Статистика", callback_data=f"stats:{c['name']}")]
+                ]
+            )
+            await message.answer(text, reply_markup=kb)
 
-        await message.answer(text)
     except WGManagerError as e:
         await message.answer(f"Failed: {e}")
 
@@ -207,6 +232,9 @@ async def main():
     dp.message.register(lambda m, c: cmd_addclient(m, c, cfg, wg), Command("addclient"))
     dp.message.register(lambda m, c: cmd_removeclient(m, c, cfg, wg), Command("removeclient"))
     dp.message.register(lambda m: cmd_listclients(m, cfg, wg), Command("listclients"))
+    dp.message.register(lambda m: cmd_listclients(m, cfg, wg), Command("listclients"))
+    dp.callback_query.register(lambda c: cb_stats(c, cfg, wg), F.data.startswith("stats:"))
+
 
     # Регистрируем команды в Telegram API
     await register_bot_commands(bot)

@@ -243,6 +243,34 @@ class WGManager:
             raise WGManagerError(f"Failed to remove client files: {e}")
 
         return True
+    
+    def peer_stats(self, name):
+        """Возвращает статистику для клиента по имени"""
+        meta_path = os.path.join(self.client_dir, f"{name}.json")
+        if not os.path.exists(meta_path):
+            raise WGManagerError("Client not found")
+
+        with open(meta_path, "r", encoding="utf-8") as f:
+            meta = json.load(f)
+
+        pub = meta.get("pubkey")
+        if not pub:
+            raise WGManagerError("No pubkey in client metadata")
+
+        dump = self._run(["wg", "show", self.wg_iface, "dump"])
+        for line in dump.splitlines():
+            cols = line.split("\t")
+            if len(cols) >= 12 and cols[1] != pub and cols[5] == pub:  # peer pubkey в 6-й колонке
+                return {
+                    "pubkey": cols[5],
+                    "endpoint": cols[7] or "(нет)",
+                    "allowed_ips": cols[8],
+                    "latest_handshake": cols[9],
+                    "rx_bytes": cols[10],
+                    "tx_bytes": cols[11],
+                }
+        raise WGManagerError("Peer not found in wg dump")
+
 
     # --- list clients ---
     def list_clients(self):
