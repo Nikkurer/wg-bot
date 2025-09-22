@@ -4,16 +4,27 @@ import subprocess
 import ipaddress
 import json
 import tempfile
+import logging
 
 class WGManagerError(Exception):
-    pass
+    def __init__(self, message, logger=None, level="error", **kwargs):
+        super().__init__(message)
+        self._extra = kwargs  # любые дополнительные данные (например stderr)
+        if logger:
+            log_func = getattr(logger, level, logger.error)
+            log_func(f"[WGManagerError] {message}")
 
 class WGManager:
-    def __init__(self, wg_iface, client_dir, wg_subnet, server_public_key=None):
+    def __init__(self, wg_iface, client_dir, wg_subnet, server_public_key=None, logger=None):
         self.wg_iface = wg_iface
         self.client_dir = client_dir
         self.wg_subnet = ipaddress.ip_network(wg_subnet)
         self.server_public_key = server_public_key
+
+        # --- logger setup ---
+        self.logger = logger or logging.getLogger("wg_manager")
+        self.logger.debug("Initializing WGManager...")
+
         uid = os.getuid()
         # Проверка каталога
         os.makedirs(self.client_dir, exist_ok=True)
@@ -22,8 +33,9 @@ class WGManager:
             raise WGManagerError(f"CLIENT_DIR must be owned by UID {uid}")
         if st.st_mode & 0o077:
             raise WGManagerError("CLIENT_DIR must not be group/other writable")
+        self.logger.debug(f"CLIENT_DIR permissions OK: {self.client_dir}")
 
-    # --- helper subprocess wrapper ---
+    # --- helper subprocess wrapper (avoid logging secrets) ---
     def _run(self, cmd, input_data=None, check=True):
         """Run subprocess and return stdout (text). Raises WGManagerError on failure."""
         try:
@@ -35,14 +47,14 @@ class WGManager:
                 text=True,
                 env={"PATH": "/usr/bin:/bin"}
             )
+            self.logger.debug(f"Command succeeded: {' '.join(cmd)}")
             return proc.stdout.strip()
         except subprocess.CalledProcessError as e:
-            # redact stderr before storing into the exception message
             safe_err = "Что-то пошло не так. Напиши админу" if e.stderr else "Упс. Не понял что произошло - напиши админу."
-            # store stderr in debug-only attribute, not in the message
             ex = WGManagerError(f"Command failed: {' '.join(cmd)}; exit={e.returncode}; stderr={safe_err}")
-            # attach full stderr for admin logs only
             ex._full_stderr = e.stderr
+            self.logger.error(f"Command failed: {' '.join(cmd)}; exit={e.returncode}")
+            self.logger.debug(f"STDERR:\ {ex._full_stderr}")
             raise ex
 
     # --- status ---
@@ -62,14 +74,15 @@ class WGManager:
                 else:
                     safe_cols.append(c)
             sanitized_lines.append("\t".join(safe_cols))
+        self.logger.debug(f"Status fetched: {len(sanitized_lines)} lines")
         return "\n".join(sanitized_lines) if sanitized_lines else "(no output)"
 
     # --- key generation ---
     def _gen_keypair(self):
         priv = self._run(["wg", "genkey"])
-        # use subprocess.run without shell
         proc = subprocess.run(["wg", "pubkey"], input=priv + "\n", capture_output=True, text=True, check=True)
         pub = proc.stdout.strip()
+        self.logger.debug("Generated keypair for new client")
         return priv.strip(), pub.strip()
 
     # --- helper: atomic write ---
@@ -126,6 +139,7 @@ class WGManager:
                             used.add(a.split("/")[0])
         except WGManagerError:
             pass
+        self.logger.debug(f"Used IPs: {used}")
         return used
 
     def _next_free_ip(self):
@@ -135,6 +149,7 @@ class WGManager:
         for ip in self.wg_subnet.hosts():
             s = str(ip)
             if s not in used:
+                self.logger.debug(f"Next free IP: {s}")
                 return s + '/' + str(self.wg_subnet.prefixlen)
         raise WGManagerError("No free IPs available in subnet")
 
@@ -157,6 +172,7 @@ class WGManager:
             # добавляем пир в интерфейс
             self._run(["wg", "set", self.wg_iface, "peer", pub, "allowed-ips", client_ip.split("/")[0] + "/32"])
             added_peer = True
+            self.logger.info(f"Added peer {name} with IP {client_ip}")
 
             server_pub = self.server_public_key or "<SERVER_PUBLIC_KEY>"
             client_conf = [
@@ -180,14 +196,16 @@ class WGManager:
                 "conf_path": conf_path,
             }
             self._atomic_write(meta_path, json.dumps(meta, indent=2), mode=0o600)
-
+            self.logger.debug(f"Client files written for {name}")
         except Exception as e:
             if added_peer:
+                # rollback peer
                 try:
                     self._run(["wg", "set", self.wg_iface, "peer", pub, "remove"])
+                    self.logger.info(f"Rollback peer {name} due to write failure")
                 except Exception:
                     pass
-            raise WGManagerError(f"Failed to add client '{name}': {e}")
+            raise WGManagerError(f"Failed to add client: {e}")
 
         return {
             "name": name,
@@ -206,17 +224,22 @@ class WGManager:
             meta = json.load(f)
         pub = meta.get("pubkey")
         conf_path = meta.get("conf_path")
+
         try:
             self._run(["wg", "set", self.wg_iface, "peer", pub, "remove"])
+            self.logger.info(f"Removed peer {name}")
         except WGManagerError as e:
-            raise WGManagerError(f"Failed to remove peer from interface: {e}")
+            self.logger.error(f"Failed to remove peer {name}: {e}")
+            raise WGManagerError(e)
 
         # удалить файлы
         try:
             if conf_path and os.path.exists(conf_path):
                 os.remove(conf_path)
             os.remove(meta_path)
+            self.logger.debug(f"Client files removed for {name}")
         except Exception as e:
+            self.logger.error(f"Failed to remove client files for {name}: {e}")
             raise WGManagerError(f"Failed to remove client files: {e}")
 
         return True
