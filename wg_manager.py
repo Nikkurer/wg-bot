@@ -243,3 +243,21 @@ class WGManager:
             raise WGManagerError(f"Failed to remove client files: {e}")
 
         return True
+
+    # --- list clients ---
+    def list_clients(self):
+        clients = []
+        for fn in os.listdir(self.client_dir):
+            if fn.endswith(".json"):
+                try:
+                    with open(os.path.join(self.client_dir, fn), "r", encoding="utf-8") as f:
+                        meta = json.load(f)
+                    clients.append({
+                        "name": meta.get("name"),
+                        "ip": meta.get("client_ip"),
+                        "pubkey": meta.get("pubkey"),
+                    })
+                except Exception as e:
+                    self.logger.warning(f"Failed to read client file {fn}: {e}")
+                    continue
+        return clients

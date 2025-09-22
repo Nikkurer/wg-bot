@@ -73,6 +73,7 @@ async def register_bot_commands(bot: Bot):
         BotCommand(command="addclient", description="Добавить нового клиента"),
         BotCommand(command="removeclient", description="Удалить клиента"),
         BotCommand(command="help", description="Справка по командам"),
+        BotCommand(command="listclients", description="Показать список клиентов"),
     ]
     await bot.set_my_commands(commands)
 
@@ -161,6 +162,25 @@ async def cmd_removeclient(message: Message, command: CommandObject, cfg, wg: WG
         infoLog.error(f"Unexpected error: {traceback.format_exc()}")
         await message.answer(f"Unexpected error: {e}")
 
+async def cmd_listclients(message: Message, cfg, wg: WGManager):
+    if not user_allowed(cfg, message.from_user.id):
+        await message.answer("Access denied.")
+        return
+    try:
+        clients = wg.list_clients()
+        if not clients:
+            await message.answer("Нет клиентов.")
+            return
+
+        text = "Клиенты WireGuard:\n\n"
+        for c in clients:
+            text += f"• {c['name']} — {c['ip']} (pubkey: {c['pubkey'][:8]}...)\n"
+
+        await message.answer(text)
+    except WGManagerError as e:
+        await message.answer(f"Failed: {e}")
+
+
 # --- main ---
 async def main():
     parser = argparse.ArgumentParser()
@@ -186,6 +206,7 @@ async def main():
     dp.message.register(lambda m: cmd_status(m, cfg, wg), Command("status"))
     dp.message.register(lambda m, c: cmd_addclient(m, c, cfg, wg), Command("addclient"))
     dp.message.register(lambda m, c: cmd_removeclient(m, c, cfg, wg), Command("removeclient"))
+    dp.message.register(lambda m: cmd_listclients(m, cfg, wg), Command("listclients"))
 
     # Регистрируем команды в Telegram API
     await register_bot_commands(bot)
