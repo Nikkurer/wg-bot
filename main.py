@@ -8,6 +8,7 @@ import asyncio
 import qrcode
 import os
 
+from functools import partial
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import (
     Message, BotCommand, InlineKeyboardMarkup,
@@ -266,17 +267,17 @@ async def main():
     bot = Bot(token=cfg["TELEGRAM_TOKEN"])
     dp = Dispatcher()
 
-    dp.message.register(lambda m: cmd_help(m, wg, um), Command("help"))
-    dp.message.register(lambda m: cmd_status(m, wg, um), Command("status"))
-    dp.message.register(lambda m, c: cmd_addclient(m, c, wg, um), Command("addclient"))
-    dp.message.register(lambda m, c: cmd_removeclient(m, c, wg, um), Command("removeclient"))
-    dp.message.register(lambda m: cmd_listclients(m, wg, um), Command("listclients"))
+    dp.message.register(partial(cmd_help, wg=wg, um=um), Command("help"))
+    dp.message.register(partial(cmd_status, wg=wg, um=um), Command("status"))
+    dp.message.register(partial(cmd_addclient, wg=wg, um=um), Command("addclient"))
+    dp.message.register(partial(cmd_removeclient, wg=wg, um=um), Command("removeclient"))
+    dp.message.register(partial(cmd_listclients, wg=wg, um=um), Command("listclients"))
 
-    dp.message.register(lambda m: cmd_listusers(m, um), Command("listusers"))
-    dp.message.register(lambda m, c: cmd_adduser(m, c, um), Command("adduser"))
-    dp.message.register(lambda m, c: cmd_removeuser(m, c, um), Command("removeuser"))
+    dp.message.register(partial(cmd_listusers, um=um), Command("listusers"))
+    dp.message.register(partial(cmd_adduser, um=um), Command("adduser"))
+    dp.message.register(partial(cmd_removeuser, um=um), Command("removeuser"))
 
-    dp.callback_query.register(lambda c: cb_stats(c, wg, um), F.data.startswith("stats:"))
+    dp.callback_query.register(partial(cb_stats, wg=wg, um=um), F.data.startswith("stats:"))
 
     await register_bot_commands(bot)
     infoLog.info("Bot starting...")
