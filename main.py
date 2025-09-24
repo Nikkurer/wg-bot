@@ -261,7 +261,7 @@ async def main():
 
     infoLog.info(f"Config loaded. WG={cfg['WG_INTERFACE']} DIR={cfg['CLIENT_DIR']} SUBNET={cfg['WG_SUBNET']} TOKEN={mask_secret(cfg['TELEGRAM_TOKEN'])}")
 
-    um = UserManager("users.json", superadmins=[111111111])
+    um = UserManager("users.json", superadmins=[int(uid) for uid in cfg["ALLOWED_USERS"]])
     wg = WGManager(cfg["WG_INTERFACE"], cfg["CLIENT_DIR"], cfg["WG_SUBNET"], cfg.get("SERVER_PUBLIC_KEY"))
 
     bot = Bot(token=cfg["TELEGRAM_TOKEN"])
