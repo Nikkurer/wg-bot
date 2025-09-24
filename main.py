@@ -7,6 +7,8 @@ import io
 import asyncio
 import qrcode
 import os
+import html
+import datetime
 
 from functools import partial
 from aiogram import Bot, Dispatcher, F
@@ -120,12 +122,86 @@ async def cmd_help(message: Message, wg: WGManager, um: UserManager):
 
 
 async def cmd_status(message: Message, wg: WGManager, um: UserManager):
+    def format_bytes(val: str) -> str:
+        """Форматируем байты в KiB/MiB/..."""
+        val = int(val)
+        units = ["B", "KiB", "MiB", "GiB", "TiB"]
+        size = float(val)
+        for u in units:
+            if size < 1024:
+                return f"{size:.2f} {u}"
+            size /= 1024
+        return f"{size:.2f} PiB"
+
+
+    def format_handshake(ts: str) -> str:
+        """Преобразуем timestamp в человекочитаемый вид"""
+        ts = int(ts)
+        if ts == 0:
+            return "never"
+        dt = datetime.datetime.fromtimestamp(ts)
+        ago = datetime.datetime.now() - dt
+        minutes, seconds = divmod(ago.seconds, 60)
+        return f"{minutes}m {seconds}s ago"
+
+
+    def parse_wg_dump(output: str) -> dict:
+        """Парсим вывод `wg show wg0 dump`"""
+        lines = [line.strip() for line in output.splitlines() if line.strip()]
+        if not lines:
+            return {}
+
+        result = {"interface": {}, "peers": []}
+
+        # интерфейс (первая строка)
+        iface = lines[0].split("\t")
+        result["interface"] = {
+            "private_key": iface[0],
+            "public_key": iface[1],
+            "listen_port": iface[2],
+            "fwmark": iface[3],
+        }
+
+        # остальные строки — клиенты
+        for line in lines[1:]:
+            cols = line.split("\t")
+            peer = {
+                "public_key": cols[0],
+                "preshared_key": cols[1],
+                "endpoint": cols[2],
+                "allowed_ips": cols[3],
+                "latest_handshake": format_handshake(cols[4]),
+                "transfer_rx": format_bytes(cols[5]),
+                "transfer_tx": format_bytes(cols[6]),
+                "keepalive": cols[7],
+            }
+            result["peers"].append(peer)
+
+        return result
+    
     if not um.is_user(message.from_user.id):
         await message.answer("Access denied.")
         return
     try:
-        st = wg.status()
-        await message.answer(f"Status:\n<pre>{st}</pre>", parse_mode="HTML")
+        raw_output = wg.status()  # должен вызывать `wg show wg0 dump`
+        parsed = parse_wg_dump(raw_output)
+
+        text = [
+            f"🔐 Interface: <b>wg0</b>",
+            f"📡 Port: {parsed['interface']['listen_port']}",
+            "",
+            "👥 Peers:",
+        ]
+        for p in parsed["peers"]:
+            text.append(
+                f"— <code>{html.escape(p['public_key'])}</code>\n"
+                f"   ➤ Endpoint: {html.escape(p['endpoint'])}\n"
+                f"   ➤ IPs: {html.escape(p['allowed_ips'])}\n"
+                f"   ➤ Last handshake: {p['latest_handshake']}\n"
+                f"   ➤ Traffic: ⬇️ {p['transfer_rx']} | ⬆️ {p['transfer_tx']}"
+            )
+
+        await message.answer("\n".join(text), parse_mode="HTML")
     except Exception as e:
         infoLog.error(f"Status failed: {e}")
         await message.answer(f"Error: {e}")
