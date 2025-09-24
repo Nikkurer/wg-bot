@@ -1,4 +1,3 @@
-# main.py
 import argparse
 import logging
 import sys
@@ -9,11 +8,15 @@ import asyncio
 import qrcode
 import os
 
-from aiogram import Bot, Dispatcher
-from aiogram.types import Message, BotCommand, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, F
+from aiogram import Bot, Dispatcher, F
+from aiogram.types import (
+    Message, BotCommand, InlineKeyboardMarkup,
+    InlineKeyboardButton, CallbackQuery
+)
 from aiogram.filters import Command, CommandObject
 
 from wg_manager import WGManager, WGManagerError
+from users import UserManager, UserManagerError
 
 # --- Logging setup ---
 infoLog = logging.getLogger("wg_bot_info")
@@ -38,8 +41,9 @@ def setup_logging(verbosity):
     infoLog.propagate = True
     debugLog.propagate = True
 
+
 # --- Config loader ---
-REQUIRED_KEYS = ["WG_INTERFACE", "CLIENT_DIR", "WG_SUBNET", "TELEGRAM_TOKEN", "ALLOWED_USERS"]
+REQUIRED_KEYS = ["WG_INTERFACE", "CLIENT_DIR", "WG_SUBNET", "TELEGRAM_TOKEN"]
 
 def LoadConfig(path):
     if not path or not os.path.exists(path):
@@ -49,37 +53,37 @@ def LoadConfig(path):
     for k in REQUIRED_KEYS:
         if k not in cfg:
             raise KeyError(f"Missing required config key: {k}")
-    if not isinstance(cfg["ALLOWED_USERS"], list):
-        raise KeyError("ALLOWED_USERS must be a list")
-    cfg["ALLOWED_USERS"] = [int(x) for x in cfg["ALLOWED_USERS"]]
     if not os.path.isdir(cfg["CLIENT_DIR"]):
         raise FileNotFoundError(f"CLIENT_DIR not found: {cfg['CLIENT_DIR']}")
     return cfg
+
 
 # --- helpers ---
 def mask_secret(s, keep=4):
     if not s:
         return "<empty>"
-    if len(s) <= keep*2:
+    if len(s) <= keep * 2:
         return "<REDACTED>"
     return s[:keep] + "..." + s[-keep:]
 
-def user_allowed(cfg, user_id):
-    return user_id in cfg["ALLOWED_USERS"]
 
 async def register_bot_commands(bot: Bot):
     commands = [
         BotCommand(command="status", description="Показать статус WireGuard"),
         BotCommand(command="addclient", description="Добавить нового клиента"),
         BotCommand(command="removeclient", description="Удалить клиента"),
-        BotCommand(command="help", description="Справка по командам"),
         BotCommand(command="listclients", description="Показать список клиентов"),
+        BotCommand(command="help", description="Справка по командам"),
+        BotCommand(command="listusers", description="Показать пользователей"),
+        BotCommand(command="adduser", description="Добавить пользователя"),
+        BotCommand(command="removeuser", description="Удалить пользователя"),
     ]
     await bot.set_my_commands(commands)
 
+
 # --- Handlers ---
-async def cb_stats(callback: CallbackQuery, cfg, wg: WGManager):
-    if not user_allowed(cfg, callback.from_user.id):
+async def cb_stats(callback: CallbackQuery, wg: WGManager, um: UserManager):
+    if not um.is_user(callback.from_user.id):
         await callback.answer("Access denied.", show_alert=True)
         return
 
@@ -95,37 +99,39 @@ async def cb_stats(callback: CallbackQuery, cfg, wg: WGManager):
             f"TX: {stats['tx_bytes']} bytes\n"
         )
         await callback.message.answer(text)
-        await callback.answer()  # убираем "часики"
+        await callback.answer()
     except Exception as e:
         await callback.answer(f"Ошибка: {e}", show_alert=True)
 
-async def cmd_help(message: Message, cfg, wg: WGManager):
-    if not user_allowed(cfg, message.from_user.id):
-        infoLog.info(f"Denied access for user {message.from_user.id}")
+
+async def cmd_help(message: Message, wg: WGManager, um: UserManager):
+    if not um.is_user(message.from_user.id):
         await message.answer("Access denied.")
         return
     await message.answer(
         "WireGuard management bot — команды:\n\n"
-        "/status — показать статус (sanitized)\n"
+        "/status — показать статус\n"
         "/addclient <name> — создать клиента\n"
         "/removeclient <name> — удалить клиента\n"
-        "/help — показать это сообщение\n"
+        "/listclients — список клиентов\n"
+        "/help — это сообщение\n"
     )
 
-async def cmd_status(message: Message, cfg, wg: WGManager):
-    if not user_allowed(cfg, message.from_user.id):
+
+async def cmd_status(message: Message, wg: WGManager, um: UserManager):
+    if not um.is_user(message.from_user.id):
         await message.answer("Access denied.")
         return
     try:
         st = wg.status()
         await message.answer(f"Status:\n<pre>{st}</pre>", parse_mode="HTML")
-        infoLog.info(f"/status by {message.from_user.id}")
     except Exception as e:
         infoLog.error(f"Status failed: {e}")
         await message.answer(f"Error: {e}")
 
-async def cmd_addclient(message: Message, command: CommandObject, cfg, wg: WGManager):
-    if not user_allowed(cfg, message.from_user.id):
+
+async def cmd_addclient(message: Message, command: CommandObject, wg: WGManager, um: UserManager):
+    if not um.is_admin(message.from_user.id):
         await message.answer("Access denied.")
         return
     if not command.args:
@@ -134,38 +140,30 @@ async def cmd_addclient(message: Message, command: CommandObject, cfg, wg: WGMan
     name = command.args.strip()
     try:
         res = wg.add_client(name)
-        infoLog.info(f"Added client '{name}' by {message.from_user.id}")
-
-        # Отправляем .conf как файл
         await message.answer_document(
             document=open(res["conf_path"], "rb"),
             filename=f"{name}.conf",
             caption=f"Client '{name}' created with IP {res['client_ip']}"
         )
-
-        # Генерируем QR-код из текста конфига
         qr = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_Q)
         qr.add_data(res["client_conf"])
         qr.make(fit=True)
         img = qr.make_image(fill_color="black", back_color="white")
-
         bio = io.BytesIO()
         bio.name = f"{name}.png"
         img.save(bio, "PNG")
         bio.seek(0)
-
-        # Отправляем QR-код как фото
         await message.answer_photo(photo=bio, caption=f"QR для клиента '{name}'")
-
     except WGManagerError as e:
-        infoLog.error("WGManagerError: %s", getattr(e, "_full_stderr", str(e)))  # подробности только в лог
-        await message.answer("Операция не выполнена (внутренняя ошибка). Администратор уведомлен.")
+        infoLog.error("WGManagerError: %s", getattr(e, "_full_stderr", str(e)))
+        await message.answer("Ошибка при добавлении клиента.")
     except Exception as e:
         infoLog.error(f"Unexpected error: {traceback.format_exc()}")
         await message.answer(f"Unexpected error: {e}")
 
-async def cmd_removeclient(message: Message, command: CommandObject, cfg, wg: WGManager):
-    if not user_allowed(cfg, message.from_user.id):
+
+async def cmd_removeclient(message: Message, command: CommandObject, wg: WGManager, um: UserManager):
+    if not um.is_admin(message.from_user.id):
         await message.answer("Access denied.")
         return
     if not command.args:
@@ -174,17 +172,17 @@ async def cmd_removeclient(message: Message, command: CommandObject, cfg, wg: WG
     name = command.args.strip()
     try:
         wg.remove_client(name)
-        infoLog.info(f"Removed client '{name}' by {message.from_user.id}")
         await message.answer(f"Client '{name}' removed.")
     except WGManagerError as e:
-        infoLog.error("WGManagerError: %s", getattr(e, "_full_stderr", str(e)))  # подробности только в лог
-        await message.answer("Операция не выполнена (внутренняя ошибка). Администратор уведомлен.")
+        infoLog.error("WGManagerError: %s", getattr(e, "_full_stderr", str(e)))
+        await message.answer("Ошибка при удалении клиента.")
     except Exception as e:
         infoLog.error(f"Unexpected error: {traceback.format_exc()}")
         await message.answer(f"Unexpected error: {e}")
 
-async def cmd_listclients(message: Message, cfg, wg: WGManager):
-    if not user_allowed(cfg, message.from_user.id):
+
+async def cmd_listclients(message: Message, wg: WGManager, um: UserManager):
+    if not um.is_user(message.from_user.id):
         await message.answer("Access denied.")
         return
     try:
@@ -192,7 +190,6 @@ async def cmd_listclients(message: Message, cfg, wg: WGManager):
         if not clients:
             await message.answer("Нет клиентов.")
             return
-
         for c in clients:
             text = f"• {c['name']} — {c['ip']} (pubkey: {c['pubkey'][:8]}...)\n"
             kb = InlineKeyboardMarkup(
@@ -201,9 +198,49 @@ async def cmd_listclients(message: Message, cfg, wg: WGManager):
                 ]
             )
             await message.answer(text, reply_markup=kb)
-
     except WGManagerError as e:
         await message.answer(f"Failed: {e}")
+
+
+# --- user management handlers ---
+async def cmd_listusers(message: Message, um: UserManager):
+    if not um.is_admin(message.from_user.id):
+        await message.answer("Access denied.")
+        return
+    users = um.list_users()
+    text = "Список пользователей:\n\n"
+    for u in users:
+        text += f"👤 {u['id']} — {u['role']}\n"
+    await message.answer(text)
+
+
+async def cmd_adduser(message: Message, command: CommandObject, um: UserManager):
+    if not um.is_admin(message.from_user.id):
+        await message.answer("Access denied.")
+        return
+    if not command.args:
+        await message.answer("Usage: /adduser <id> <role>")
+        return
+    try:
+        user_id_str, role = command.args.split(maxsplit=1)
+        um.add_user(int(user_id_str), role)
+        await message.answer(f"✅ Пользователь {user_id_str} добавлен с ролью {role}.")
+    except Exception as e:
+        await message.answer(f"❌ Ошибка: {e}")
+
+
+async def cmd_removeuser(message: Message, command: CommandObject, um: UserManager):
+    if not um.is_admin(message.from_user.id):
+        await message.answer("Access denied.")
+        return
+    if not command.args:
+        await message.answer("Usage: /removeuser <id>")
+        return
+    try:
+        um.remove_user(int(command.args.strip()))
+        await message.answer(f"✅ Пользователь {command.args.strip()} удалён.")
+    except Exception as e:
+        await message.answer(f"❌ Ошибка: {e}")
 
 
 # --- main ---
@@ -223,24 +260,28 @@ async def main():
 
     infoLog.info(f"Config loaded. WG={cfg['WG_INTERFACE']} DIR={cfg['CLIENT_DIR']} SUBNET={cfg['WG_SUBNET']} TOKEN={mask_secret(cfg['TELEGRAM_TOKEN'])}")
 
+    um = UserManager("users.json", superadmins=[111111111])
     wg = WGManager(cfg["WG_INTERFACE"], cfg["CLIENT_DIR"], cfg["WG_SUBNET"], cfg.get("SERVER_PUBLIC_KEY"))
+
     bot = Bot(token=cfg["TELEGRAM_TOKEN"])
     dp = Dispatcher()
 
-    dp.message.register(lambda m: cmd_help(m, cfg, wg), Command("help"))
-    dp.message.register(lambda m: cmd_status(m, cfg, wg), Command("status"))
-    dp.message.register(lambda m, c: cmd_addclient(m, c, cfg, wg), Command("addclient"))
-    dp.message.register(lambda m, c: cmd_removeclient(m, c, cfg, wg), Command("removeclient"))
-    dp.message.register(lambda m: cmd_listclients(m, cfg, wg), Command("listclients"))
-    dp.message.register(lambda m: cmd_listclients(m, cfg, wg), Command("listclients"))
-    dp.callback_query.register(lambda c: cb_stats(c, cfg, wg), F.data.startswith("stats:"))
+    dp.message.register(lambda m: cmd_help(m, wg, um), Command("help"))
+    dp.message.register(lambda m: cmd_status(m, wg, um), Command("status"))
+    dp.message.register(lambda m, c: cmd_addclient(m, c, wg, um), Command("addclient"))
+    dp.message.register(lambda m, c: cmd_removeclient(m, c, wg, um), Command("removeclient"))
+    dp.message.register(lambda m: cmd_listclients(m, wg, um), Command("listclients"))
 
+    dp.message.register(lambda m: cmd_listusers(m, um), Command("listusers"))
+    dp.message.register(lambda m, c: cmd_adduser(m, c, um), Command("adduser"))
+    dp.message.register(lambda m, c: cmd_removeuser(m, c, um), Command("removeuser"))
 
-    # Регистрируем команды в Telegram API
+    dp.callback_query.register(lambda c: cb_stats(c, wg, um), F.data.startswith("stats:"))
+
     await register_bot_commands(bot)
-
     infoLog.info("Bot starting...")
     await dp.start_polling(bot)
+
 
 if __name__ == "__main__":
     asyncio.run(main())
