@@ -60,7 +60,7 @@ class WGManager:
     # --- status ---
     def status(self):
         # Return sanitized wg show output
-        out = self._run(["wg", "show", self.wg_iface, "dump"])
+        out = self._run(["sudo", "wg", "show", self.wg_iface, "dump"])
         # The dump contains keys and such — sanitize private-like fields:
         # wg dump columns: interface, private key, public key, listen port, fwmark, peer public key, preshared key, endpoint, allowed ips, latest handshake, rx_bytes, tx_bytes
         # We will hide columns that look like keys by replacing long base64-like strings with "<REDACTED>"
@@ -79,8 +79,8 @@ class WGManager:
 
     # --- key generation ---
     def _gen_keypair(self):
-        priv = self._run(["wg", "genkey"])
-        proc = subprocess.run(["wg", "pubkey"], input=priv + "\n", capture_output=True, text=True, check=True)
+        priv = self._run(["sudo", "wg", "genkey"])
+        proc = subprocess.run(["sudo", "wg", "pubkey"], input=priv + "\n", capture_output=True, text=True, check=True)
         pub = proc.stdout.strip()
         self.logger.debug("Generated keypair for new client")
         return priv.strip(), pub.strip()
@@ -128,7 +128,7 @@ class WGManager:
                     continue
         # also parse 'wg show' for allowed-ips
         try:
-            dump = self._run(["wg", "show", self.wg_iface, "dump"])
+            dump = self._run(["sudo", "wg", "show", self.wg_iface, "dump"])
             for line in dump.splitlines():
                 cols = line.split("\t")
                 if len(cols) >= 9:
@@ -170,7 +170,7 @@ class WGManager:
         added_peer = False
         try:
             # добавляем пир в интерфейс
-            self._run(["wg", "set", self.wg_iface, "peer", pub, "allowed-ips", client_ip.split("/")[0] + "/32"])
+            self._run(["sudo", "wg", "set", self.wg_iface, "peer", pub, "allowed-ips", client_ip.split("/")[0] + "/32"])
             added_peer = True
             self.logger.info(f"Added peer {name} with IP {client_ip}")
 
@@ -201,7 +201,7 @@ class WGManager:
             if added_peer:
                 # rollback peer
                 try:
-                    self._run(["wg", "set", self.wg_iface, "peer", pub, "remove"])
+                    self._run(["sudo", "wg", "set", self.wg_iface, "peer", pub, "remove"])
                     self.logger.info(f"Rollback peer {name} due to write failure")
                 except Exception:
                     pass
@@ -226,7 +226,7 @@ class WGManager:
         conf_path = meta.get("conf_path")
 
         try:
-            self._run(["wg", "set", self.wg_iface, "peer", pub, "remove"])
+            self._run(["sudo", "wg", "set", self.wg_iface, "peer", pub, "remove"])
             self.logger.info(f"Removed peer {name}")
         except WGManagerError as e:
             self.logger.error(f"Failed to remove peer {name}: {e}")
@@ -257,7 +257,7 @@ class WGManager:
         if not pub:
             raise WGManagerError("No pubkey in client metadata")
 
-        dump = self._run(["wg", "show", self.wg_iface, "dump"])
+        dump = self._run(["sudo", "wg", "show", self.wg_iface, "dump"])
         for line in dump.splitlines():
             cols = line.split("\t")
             if len(cols) >= 12 and cols[1] != pub and cols[5] == pub:  # peer pubkey в 6-й колонке
