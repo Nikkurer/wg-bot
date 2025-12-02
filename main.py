@@ -1,35 +1,46 @@
 import argparse
-import logging
-import sys
-import yaml
-import traceback
-import io
 import asyncio
-import qrcode
-import os
-import html
 import datetime
-
+import html
+import io
+import logging
+import os
+import sys
+import traceback
 from functools import partial
-from aiogram import Bot, Dispatcher, F
-from aiogram.types import (
-    Message, BotCommand, InlineKeyboardMarkup,
-    InlineKeyboardButton, CallbackQuery
-)
-from aiogram.filters import Command, CommandObject
 
+import qrcode
+import yaml
+from aiogram import Bot, Dispatcher, F
+from aiogram.filters import Command, CommandObject
+from aiogram.types import (
+    BotCommand,
+    BufferedInputFile,
+    CallbackQuery,
+    FSInputFile,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+)
+
+from users import UserManager
 from wg_manager import WGManager, WGManagerError
-from users import UserManager, UserManagerError
 
 # --- Logging setup ---
 infoLog = logging.getLogger("wg_bot_info")
 debugLog = logging.getLogger("wg_bot_debug")
 
+
 def setup_logging(verbosity):
     root = logging.getLogger()
-    root.setLevel(logging.DEBUG if verbosity >= 2 else (logging.INFO if verbosity == 1 else logging.WARNING))
-    formatter = logging.Formatter(fmt="%(asctime)s [%(levelname)s] %(message)s",
-                                  datefmt="%Y-%m-%d %H:%M:%S")
+    root.setLevel(
+        logging.DEBUG
+        if verbosity >= 2
+        else (logging.INFO if verbosity == 1 else logging.WARNING)
+    )
+    formatter = logging.Formatter(
+        fmt="%(asctime)s [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
+    )
 
     ch_info = logging.StreamHandler(sys.stdout)
     ch_info.setLevel(logging.INFO)
@@ -47,6 +58,7 @@ def setup_logging(verbosity):
 
 # --- Config loader ---
 REQUIRED_KEYS = ["WG_INTERFACE", "CLIENT_DIR", "WG_SUBNET", "TELEGRAM_TOKEN"]
+
 
 def LoadConfig(path):
     if not path or not os.path.exists(path):
@@ -133,7 +145,6 @@ async def cmd_status(message: Message, wg: WGManager, um: UserManager):
             size /= 1024
         return f"{size:.2f} PiB"
 
-
     def format_handshake(ts: str) -> str:
         """Преобразуем timestamp в человекочитаемый вид"""
         ts = int(ts)
@@ -143,7 +154,6 @@ async def cmd_status(message: Message, wg: WGManager, um: UserManager):
         ago = datetime.datetime.now() - dt
         minutes, seconds = divmod(ago.seconds, 60)
         return f"{minutes}m {seconds}s ago"
-
 
     def parse_wg_dump(output: str) -> dict:
         """Парсим вывод `wg show wg0 dump`"""
@@ -178,7 +188,7 @@ async def cmd_status(message: Message, wg: WGManager, um: UserManager):
             result["peers"].append(peer)
 
         return result
-    
+
     if not um.is_user(message.from_user.id):
         await message.answer("Access denied.")
         return
@@ -187,7 +197,7 @@ async def cmd_status(message: Message, wg: WGManager, um: UserManager):
         parsed = parse_wg_dump(raw_output)
 
         text = [
-            f"🔐 Interface: <b>wg0</b>",
+            "🔐 Interface: <b>wg0</b>",
             f"📡 Port: {parsed['interface']['listen_port']}",
             "",
             "👥 Peers:",
@@ -207,7 +217,9 @@ async def cmd_status(message: Message, wg: WGManager, um: UserManager):
         await message.answer(f"Error: {e}")
 
 
-async def cmd_addclient(message: Message, command: CommandObject, wg: WGManager, um: UserManager):
+async def cmd_addclient(
+    message: Message, command: CommandObject, wg: WGManager, um: UserManager
+):
     if not um.is_admin(message.from_user.id):
         await message.answer("Access denied.")
         return
@@ -218,19 +230,18 @@ async def cmd_addclient(message: Message, command: CommandObject, wg: WGManager,
     try:
         res = wg.add_client(name)
         await message.answer_document(
-            document=open(res["conf_path"], "rb"),
-            filename=f"{name}.conf",
-            caption=f"Client '{name}' created with IP {res['client_ip']}"
+            document=FSInputFile(res["conf_path"], filename=f"{name}.conf"),
+            caption=f"Client '{name}' created with IP {res['client_ip']}",
         )
         qr = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_Q)
         qr.add_data(res["client_conf"])
         qr.make(fit=True)
         img = qr.make_image(fill_color="black", back_color="white")
         bio = io.BytesIO()
-        bio.name = f"{name}.png"
         img.save(bio, "PNG")
         bio.seek(0)
-        await message.answer_photo(photo=bio, caption=f"QR для клиента '{name}'")
+        photo_file = BufferedInputFile(bio.getvalue(), filename=f"{name}.png")
+        await message.answer_photo(photo=photo_file, caption=f"QR для клиента '{name}'")
     except WGManagerError as e:
         infoLog.error("WGManagerError: %s", getattr(e, "_full_stderr", str(e)))
         await message.answer("Ошибка при добавлении клиента.")
@@ -239,7 +250,9 @@ async def cmd_addclient(message: Message, command: CommandObject, wg: WGManager,
         await message.answer(f"Unexpected error: {e}")
 
 
-async def cmd_removeclient(message: Message, command: CommandObject, wg: WGManager, um: UserManager):
+async def cmd_removeclient(
+    message: Message, command: CommandObject, wg: WGManager, um: UserManager
+):
     if not um.is_admin(message.from_user.id):
         await message.answer("Access denied.")
         return
@@ -271,7 +284,11 @@ async def cmd_listclients(message: Message, wg: WGManager, um: UserManager):
             text = f"• {c['name']} — {c['ip']} (pubkey: {c['pubkey'][:8]}...)\n"
             kb = InlineKeyboardMarkup(
                 inline_keyboard=[
-                    [InlineKeyboardButton(text="📊 Статистика", callback_data=f"stats:{c['name']}")]
+                    [
+                        InlineKeyboardButton(
+                            text="📊 Статистика", callback_data=f"stats:{c['name']}"
+                        )
+                    ]
                 ]
             )
             await message.answer(text, reply_markup=kb)
@@ -335,10 +352,19 @@ async def main():
         infoLog.error(f"Config error: {e}")
         sys.exit(1)
 
-    infoLog.info(f"Config loaded. WG={cfg['WG_INTERFACE']} DIR={cfg['CLIENT_DIR']} SUBNET={cfg['WG_SUBNET']} TOKEN={mask_secret(cfg['TELEGRAM_TOKEN'])}")
+    infoLog.info(
+        f"Config loaded. WG={cfg['WG_INTERFACE']} DIR={cfg['CLIENT_DIR']} SUBNET={cfg['WG_SUBNET']} TOKEN={mask_secret(cfg['TELEGRAM_TOKEN'])}"
+    )
 
-    um = UserManager("users.json", superadmins=[int(uid) for uid in cfg["ALLOWED_USERS"]])
-    wg = WGManager(cfg["WG_INTERFACE"], cfg["CLIENT_DIR"], cfg["WG_SUBNET"], cfg.get("SERVER_PUBLIC_KEY"))
+    um = UserManager(
+        "users.json", superadmins=[int(uid) for uid in cfg["ALLOWED_USERS"]]
+    )
+    wg = WGManager(
+        cfg["WG_INTERFACE"],
+        cfg["CLIENT_DIR"],
+        cfg["WG_SUBNET"],
+        cfg.get("SERVER_PUBLIC_KEY"),
+    )
 
     bot = Bot(token=cfg["TELEGRAM_TOKEN"])
     dp = Dispatcher()
@@ -346,14 +372,18 @@ async def main():
     dp.message.register(partial(cmd_help, wg=wg, um=um), Command("help"))
     dp.message.register(partial(cmd_status, wg=wg, um=um), Command("status"))
     dp.message.register(partial(cmd_addclient, wg=wg, um=um), Command("addclient"))
-    dp.message.register(partial(cmd_removeclient, wg=wg, um=um), Command("removeclient"))
+    dp.message.register(
+        partial(cmd_removeclient, wg=wg, um=um), Command("removeclient")
+    )
     dp.message.register(partial(cmd_listclients, wg=wg, um=um), Command("listclients"))
 
     dp.message.register(partial(cmd_listusers, um=um), Command("listusers"))
     dp.message.register(partial(cmd_adduser, um=um), Command("adduser"))
     dp.message.register(partial(cmd_removeuser, um=um), Command("removeuser"))
 
-    dp.callback_query.register(partial(cb_stats, wg=wg, um=um), F.data.startswith("stats:"))
+    dp.callback_query.register(
+        partial(cb_stats, wg=wg, um=um), F.data.startswith("stats:")
+    )
 
     await register_bot_commands(bot)
     infoLog.info("Bot starting...")
