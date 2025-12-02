@@ -321,21 +321,55 @@ class WGManager:
     # --- list clients ---
     def list_clients(self):
         clients = []
-        for fn in os.listdir(self.client_dir):
-            if fn.endswith(".json"):
+        try:
+            files = os.listdir(self.client_dir)
+            self.logger.debug(f"Scanning {self.client_dir}: found {len(files)} files")
+            json_files = [f for f in files if f.endswith(".json")]
+            self.logger.debug(f"Found {len(json_files)} JSON files: {json_files}")
+
+            if not json_files:
+                self.logger.info(f"No JSON files found in {self.client_dir}")
+                return clients
+
+            for fn in json_files:
                 try:
-                    with open(
-                        os.path.join(self.client_dir, fn), "r", encoding="utf-8"
-                    ) as f:
+                    file_path = os.path.join(self.client_dir, fn)
+                    with open(file_path, "r", encoding="utf-8") as f:
                         meta = json.load(f)
+
+                    # Проверяем наличие обязательных полей
+                    name = meta.get("name")
+                    ip = meta.get("client_ip")
+                    pubkey = meta.get("pubkey")
+
+                    if not name or not ip or not pubkey:
+                        self.logger.warning(
+                            f"Client file {fn} missing required fields: name={name}, ip={ip}, pubkey={'present' if pubkey else 'missing'}"
+                        )
+                        continue
+
                     clients.append(
                         {
-                            "name": meta.get("name"),
-                            "ip": meta.get("client_ip"),
-                            "pubkey": meta.get("pubkey"),
+                            "name": name,
+                            "ip": ip,
+                            "pubkey": pubkey,
                         }
                     )
-                except Exception as e:
-                    self.logger.warning(f"Failed to read client file {fn}: {e}")
+                    self.logger.debug(f"Successfully loaded client {name} from {fn}")
+                except json.JSONDecodeError as e:
+                    self.logger.error(f"Invalid JSON in {fn}: {e}")
                     continue
+                except Exception as e:
+                    self.logger.error(
+                        f"Failed to read client file {fn}: {e}", exc_info=True
+                    )
+                    continue
+
+            self.logger.info(
+                f"Loaded {len(clients)} clients from {len(json_files)} JSON files"
+            )
+        except OSError as e:
+            self.logger.error(f"Cannot access client directory {self.client_dir}: {e}")
+            raise WGManagerError(f"Cannot access client directory: {e}")
+
         return clients
