@@ -66,7 +66,7 @@ class WGManager:
             )
             ex._full_stderr = e.stderr
             self.logger.error(f"Command failed: {' '.join(cmd)}; exit={e.returncode}")
-            self.logger.debug(f"STDERR:\ {ex._full_stderr}")
+            self.logger.debug(f"STDERR: {ex._full_stderr}")
             raise ex
 
     # --- status ---
@@ -303,19 +303,31 @@ class WGManager:
             raise WGManagerError("No pubkey in client metadata")
 
         dump = self._run(["sudo", "wg", "show", self.wg_iface, "dump"])
-        for line in dump.splitlines():
+        # Формат wg dump:
+        # Первая строка (интерфейс): private_key, public_key, listen_port, fwmark
+        # Остальные строки (пиры): peer_public_key, preshared_key, endpoint, allowed_ips, latest_handshake, rx_bytes, tx_bytes, keepalive
+        # Колонки пира: 0, 1, 2, 3, 4, 5, 6, 7
+        lines = dump.splitlines()
+        if not lines:
+            raise WGManagerError("Empty wg dump output")
+
+        # Пропускаем первую строку (интерфейс) и ищем пира по публичному ключу в колонке 0
+        for line in lines[1:]:
             cols = line.split("\t")
-            if (
-                len(cols) >= 12 and cols[1] != pub and cols[5] == pub
-            ):  # peer pubkey в 6-й колонке
+            if len(cols) >= 8 and cols[0] == pub:
+                self.logger.debug(f"Found peer {name} with pubkey {pub[:8]}...")
                 return {
-                    "pubkey": cols[5],
-                    "endpoint": cols[7] or "(нет)",
-                    "allowed_ips": cols[8],
-                    "latest_handshake": cols[9],
-                    "rx_bytes": cols[10],
-                    "tx_bytes": cols[11],
+                    "pubkey": cols[0],
+                    "endpoint": cols[2] or "(нет)",
+                    "allowed_ips": cols[3],
+                    "latest_handshake": cols[4],
+                    "rx_bytes": cols[5],
+                    "tx_bytes": cols[6],
                 }
+
+        self.logger.warning(
+            f"Peer {name} with pubkey {pub[:8]}... not found in wg dump (checked {len(lines) - 1} peer lines)"
+        )
         raise WGManagerError("Peer not found in wg dump")
 
     # --- list clients ---
