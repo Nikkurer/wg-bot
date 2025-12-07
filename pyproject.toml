@@ -10,3 +10,8 @@ dependencies = [
     "pyyaml>=6.0.2",
     "qrcode>=8.2",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+]
