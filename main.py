@@ -40,30 +40,45 @@ def setup_logging(verbosity):
 
     Args:
         verbosity (int): Уровень детализации логирования:
-            0 - WARNING и выше
-            1 - INFO и выше
+            0 - INFO и выше (по умолчанию)
+            1 - INFO и выше (то же самое)
             2+ - DEBUG и выше
     """
-    root = logging.getLogger()
-    root.setLevel(
+    # Определяем уровни логирования
+    # По умолчанию (verbosity=0) выводим INFO, чтобы видеть основные события
+    console_level = (
         logging.DEBUG
         if verbosity >= 2
-        else (logging.INFO if verbosity == 1 else logging.WARNING)
+        else logging.INFO  # По умолчанию INFO, а не WARNING
     )
+    file_level = logging.DEBUG
+
     formatter = logging.Formatter(
         fmt="%(asctime)s [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
     )
 
-    ch_info = logging.StreamHandler(sys.stdout)
-    ch_info.setLevel(logging.INFO)
-    ch_info.setFormatter(formatter)
-    root.addHandler(ch_info)
+    # Настраиваем root логгер
+    root = logging.getLogger()
+    root.setLevel(logging.DEBUG)  # Всегда DEBUG для root, фильтрация на уровне handlers
 
+    # Удаляем существующие обработчики, чтобы избежать дублирования
+    root.handlers.clear()
+
+    # Обработчик для консоли
+    ch_console = logging.StreamHandler(sys.stdout)
+    ch_console.setLevel(console_level)
+    ch_console.setFormatter(formatter)
+    root.addHandler(ch_console)
+
+    # Обработчик для файла
     fh = logging.FileHandler("wg_bot_debug.log")
-    fh.setLevel(logging.DEBUG)
+    fh.setLevel(file_level)
     fh.setFormatter(formatter)
     root.addHandler(fh)
 
+    # Настраиваем конкретные логгеры
+    infoLog.setLevel(logging.DEBUG)
+    debugLog.setLevel(logging.DEBUG)
     infoLog.propagate = True
     debugLog.propagate = True
 
@@ -515,8 +530,9 @@ async def main():
         infoLog.error(f"Config error: {e}")
         sys.exit(1)
 
-    infoLog.info(
-        f"Config loaded. WG={cfg['WG_INTERFACE']} DIR={cfg['CLIENT_DIR']} SUBNET={cfg['WG_SUBNET']} TOKEN={mask_secret(cfg['TELEGRAM_TOKEN'])}"
+    infoLog.info(f"Config loaded: {cfg}")
+    debugLog.debug(
+        f"Config details: WG={cfg['WG_INTERFACE']} DIR={cfg['CLIENT_DIR']} SUBNET={cfg['WG_SUBNET']} TOKEN={mask_secret(cfg['TELEGRAM_TOKEN'])}"
     )
 
     um = UserManager(
