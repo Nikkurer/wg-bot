@@ -12,6 +12,7 @@ jobs:
     strategy:
       matrix:
         python-version: ["3.13", "3.12"]
+      fail-fast: false
 
     steps:
     - name: Checkout code
@@ -28,9 +29,22 @@ jobs:
         version: "latest"
         enable-cache: true
 
-    - name: Install dependencies
+    - name: Verify Python version
       run: |
-        uv sync --dev
+        python --version
+        which python
+
+    - name: Install dependencies
+      env:
+        PYO3_USE_ABI3_FORWARD_COMPATIBILITY: "1"
+        UV_PYTHON: "python${{ matrix.python-version }}"
+      run: |
+        uv sync --dev --python python${{ matrix.python-version }}
+        echo "Dependencies installed successfully"
+
+    - name: Verify installation
+      run: |
+        uv run python -c "import pytest; print('pytest version:', pytest.__version__)"
 
     - name: Run tests
       run: |
