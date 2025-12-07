@@ -8,7 +8,24 @@ import tempfile
 
 
 class WGManagerError(Exception):
+    """Исключение для ошибок управления WireGuard.
+
+    Используется для обработки ошибок при работе с WireGuard интерфейсом,
+    клиентами и конфигурацией.
+
+    Attributes:
+        _extra (dict): Дополнительные данные об ошибке (например, stderr).
+    """
+
     def __init__(self, message, logger=None, level="error", **kwargs):
+        """Инициализирует исключение.
+
+        Args:
+            message (str): Сообщение об ошибке.
+            logger (logging.Logger, optional): Логгер для записи ошибки.
+            level (str, optional): Уровень логирования. По умолчанию "error".
+            **kwargs: Дополнительные данные об ошибке.
+        """
         super().__init__(message)
         self._extra = kwargs  # любые дополнительные данные (например stderr)
         if logger:
@@ -17,9 +34,28 @@ class WGManagerError(Exception):
 
 
 class WGManager:
+    """Менеджер для управления WireGuard интерфейсом и клиентами.
+
+    Предоставляет функциональность для создания, удаления и управления
+    клиентами WireGuard, а также для получения статистики и статуса.
+    """
+
     def __init__(
         self, wg_iface, client_dir, wg_subnet, server_public_key=None, logger=None
     ):
+        """Инициализирует менеджер WireGuard.
+
+        Args:
+            wg_iface (str): Имя интерфейса WireGuard (например, "wg0").
+            client_dir (str): Путь к директории для хранения конфигураций клиентов.
+            wg_subnet (str): Подсеть WireGuard в формате CIDR (например, "10.10.0.0/24").
+            server_public_key (str, optional): Публичный ключ сервера для клиентских конфигов.
+            logger (logging.Logger, optional): Логгер для записи событий.
+
+        Raises:
+            WGManagerError: Если директория клиентов не принадлежит текущему пользователю
+                или имеет небезопасные права доступа.
+        """
         self.wg_iface = wg_iface
         self.client_dir = client_dir
         self.wg_subnet = ipaddress.ip_network(wg_subnet)
@@ -43,7 +79,23 @@ class WGManager:
 
     # --- helper subprocess wrapper (avoid logging secrets) ---
     def _run(self, cmd, input_data=None, check=True):
-        """Run subprocess and return stdout (text). Raises WGManagerError on failure."""
+        """Выполняет команду через subprocess и возвращает stdout.
+
+        Обёртка для subprocess.run с обработкой ошибок и логированием.
+        Скрывает секретные данные в логах.
+
+        Args:
+            cmd (list): Список аргументов команды (например, ["wg", "show", "wg0"]).
+            input_data (str, optional): Данные для передачи в stdin команды.
+            check (bool, optional): Если True, вызывает исключение при ненулевом коде возврата.
+                По умолчанию True.
+
+        Returns:
+            str: Вывод команды (stdout) с удалёнными пробелами в начале и конце.
+
+        Raises:
+            WGManagerError: Если команда завершилась с ошибкой (при check=True).
+        """
         try:
             proc = subprocess.run(
                 cmd,
@@ -71,7 +123,16 @@ class WGManager:
 
     # --- status ---
     def status(self):
-        # Return sanitized wg show output
+        """Возвращает санитизированный вывод статуса WireGuard.
+
+        Выполняет `wg show <interface> dump` и скрывает секретные данные
+        (приватные ключи и preshared keys), оставляя публичные ключи
+        для идентификации пиров.
+
+        Returns:
+            str: Многострочный вывод статуса с скрытыми секретами.
+                Формат: первая строка - интерфейс, остальные - пиры.
+        """
         out = self._run(["sudo", "wg", "show", self.wg_iface, "dump"])
         # The dump contains keys and such — sanitize private-like fields:
         # wg dump format:
@@ -103,6 +164,13 @@ class WGManager:
 
     # --- key generation ---
     def _gen_keypair(self):
+        """Генерирует пару ключей WireGuard (приватный и публичный).
+
+        Использует команды `wg genkey` и `wg pubkey` для генерации ключей.
+
+        Returns:
+            tuple[str, str]: Кортеж (приватный_ключ, публичный_ключ).
+        """
         priv = self._run(["sudo", "wg", "genkey"])
         proc = subprocess.run(
             ["sudo", "wg", "pubkey"],
@@ -117,15 +185,21 @@ class WGManager:
 
     # --- helper: atomic write ---
     def _atomic_write(self, path, data, mode=0o600):
-        """Атомарная запись файла
+        """Атомарно записывает данные в файл.
+
+        Создаёт временный файл, записывает данные, устанавливает права доступа
+        и затем атомарно заменяет целевой файл. Это предотвращает повреждение
+        данных при сбоях во время записи.
 
         Args:
-            path (str): Путь до файлв
-            data (str): Данные для записи
-            mode (int, optional): Права на файл. По умоланию 0o600.
+            path (str): Путь к целевому файлу.
+            data (str): Данные для записи в файл.
+            mode (int, optional): Права доступа к файлу в восьмеричном формате.
+                По умолчанию 0o600 (rw-------).
 
         Raises:
-            WGManagerError: Ошибка при записи файла
+            WGManagerError: Если целевой путь является символической ссылкой
+                или произошла ошибка при записи.
         """
         if os.path.exists(path) and os.path.islink(path):
             raise WGManagerError("Refusing to overwrite symlink")
@@ -144,6 +218,14 @@ class WGManager:
 
     # --- find next free IP ---
     def _list_used_ips(self):
+        """Возвращает множество используемых IP-адресов в подсети.
+
+        Сканирует метаданные клиентов и вывод `wg show` для определения
+        всех занятых IP-адресов в подсети WireGuard.
+
+        Returns:
+            set[str]: Множество используемых IP-адресов (без маски подсети).
+        """
         used = set()
         # scan client metadata files
         for fn in os.listdir(self.client_dir):
@@ -173,6 +255,17 @@ class WGManager:
         return used
 
     def _next_free_ip(self):
+        """Находит следующий свободный IP-адрес в подсети WireGuard.
+
+        Итерируется по хостам в подсети (исключая сетевой и broadcast адреса)
+        и возвращает первый свободный IP.
+
+        Returns:
+            str: Свободный IP-адрес с маской подсети (например, "10.10.0.2/24").
+
+        Raises:
+            WGManagerError: Если в подсети нет свободных IP-адресов.
+        """
         used = self._list_used_ips()
         # skip network address and server address; start from .2
         # iterate hosts in wg_subnet (exclude network and broadcast)
@@ -183,8 +276,30 @@ class WGManager:
                 return s + "/" + str(self.wg_subnet.prefixlen)
         raise WGManagerError("No free IPs available in subnet")
 
-    # --- add client ---
     def add_client(self, name, allowed_ips=None):
+        """Добавляет нового клиента WireGuard.
+
+        Создаёт пару ключей, находит свободный IP, добавляет пира в интерфейс
+        и создаёт конфигурационные файлы (.conf и .json).
+
+        Args:
+            name (str): Имя клиента. Должно содержать только буквы, цифры,
+                дефисы и подчёркивания.
+            allowed_ips (str, optional): Разрешённые IP-адреса для клиента.
+                По умолчанию "0.0.0.0/0" (весь трафик).
+
+        Returns:
+            dict: Словарь с информацией о созданном клиенте:
+                - name (str): Имя клиента
+                - client_ip (str): IP-адрес клиента в подсети
+                - pubkey (str): Публичный ключ клиента
+                - conf_path (str): Путь к файлу конфигурации
+                - client_conf (str): Содержимое конфигурационного файла
+
+        Raises:
+            WGManagerError: Если имя клиента невалидно, клиент уже существует,
+                нет свободных IP-адресов или произошла ошибка при создании.
+        """
         if not name or any(
             ch not in "abcdefghijklmnopqrstuvwxyz0123456789_-" for ch in name.lower()
         ):
@@ -260,8 +375,21 @@ class WGManager:
             "client_conf": client_conf_text,
         }
 
-    # --- remove client ---
     def remove_client(self, name):
+        """Удаляет клиента WireGuard.
+
+        Удаляет пира из интерфейса WireGuard и удаляет конфигурационные файлы.
+
+        Args:
+            name (str): Имя клиента для удаления.
+
+        Returns:
+            bool: True при успешном удалении.
+
+        Raises:
+            WGManagerError: Если клиент не найден или произошла ошибка
+                при удалении пира или файлов.
+        """
         meta_path = os.path.join(self.client_dir, f"{name}.json")
         if not os.path.exists(meta_path):
             raise WGManagerError("Client not found")
@@ -290,7 +418,27 @@ class WGManager:
         return True
 
     def peer_stats(self, name):
-        """Возвращает статистику для клиента по имени"""
+        """Возвращает статистику подключения для клиента.
+
+        Получает статистику пира из вывода `wg show dump` по публичному ключу
+        клиента.
+
+        Args:
+            name (str): Имя клиента.
+
+        Returns:
+            dict: Словарь со статистикой пира:
+                - pubkey (str): Публичный ключ пира
+                - endpoint (str): Адрес endpoint или "(нет)"
+                - allowed_ips (str): Разрешённые IP-адреса
+                - latest_handshake (str): Timestamp последнего handshake
+                - rx_bytes (str): Количество полученных байт
+                - tx_bytes (str): Количество отправленных байт
+
+        Raises:
+            WGManagerError: Если клиент не найден, нет публичного ключа
+                в метаданных, вывод wg dump пуст или пир не найден в dump.
+        """
         meta_path = os.path.join(self.client_dir, f"{name}.json")
         if not os.path.exists(meta_path):
             raise WGManagerError("Client not found")
@@ -330,8 +478,20 @@ class WGManager:
         )
         raise WGManagerError("Peer not found in wg dump")
 
-    # --- list clients ---
     def list_clients(self):
+        """Возвращает список всех клиентов WireGuard.
+
+        Сканирует директорию клиентов и загружает метаданные из JSON-файлов.
+
+        Returns:
+            list[dict]: Список словарей с информацией о клиентах:
+                - name (str): Имя клиента
+                - ip (str): IP-адрес клиента в подсети
+                - pubkey (str): Публичный ключ клиента
+
+        Raises:
+            WGManagerError: Если невозможно получить доступ к директории клиентов.
+        """
         clients = []
         try:
             files = os.listdir(self.client_dir)

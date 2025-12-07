@@ -32,6 +32,18 @@ debugLog = logging.getLogger("wg_bot_debug")
 
 
 def setup_logging(verbosity):
+    """Настраивает систему логирования для бота.
+
+    Создаёт два обработчика:
+    - StreamHandler для вывода INFO и выше в stdout
+    - FileHandler для записи DEBUG и выше в файл wg_bot_debug.log
+
+    Args:
+        verbosity (int): Уровень детализации логирования:
+            0 - WARNING и выше
+            1 - INFO и выше
+            2+ - DEBUG и выше
+    """
     root = logging.getLogger()
     root.setLevel(
         logging.DEBUG
@@ -61,6 +73,24 @@ REQUIRED_KEYS = ["WG_INTERFACE", "CLIENT_DIR", "WG_SUBNET", "TELEGRAM_TOKEN"]
 
 
 def LoadConfig(path):
+    """Загружает конфигурацию из YAML файла.
+
+    Args:
+        path (str): Путь к файлу конфигурации.
+
+    Returns:
+        dict: Словарь с конфигурацией, содержащий обязательные ключи:
+            - WG_INTERFACE: Имя интерфейса WireGuard
+            - CLIENT_DIR: Директория для клиентских конфигов
+            - WG_SUBNET: Подсеть WireGuard
+            - TELEGRAM_TOKEN: Токен Telegram бота
+            - ALLOWED_USERS: Список ID супер-администраторов
+
+    Raises:
+        FileNotFoundError: Если файл конфигурации не найден или CLIENT_DIR
+            не существует.
+        KeyError: Если отсутствует обязательный ключ конфигурации.
+    """
     if not path or not os.path.exists(path):
         raise FileNotFoundError(f"Config file not found: {path}")
     with open(path, "r", encoding="utf-8") as f:
@@ -75,6 +105,17 @@ def LoadConfig(path):
 
 # --- helpers ---
 def mask_secret(s, keep=4):
+    """Маскирует секретную строку, оставляя видимыми только начало и конец.
+
+    Args:
+        s (str): Секретная строка для маскировки.
+        keep (int, optional): Количество символов для отображения в начале
+            и конце. По умолчанию 4.
+
+    Returns:
+        str: Маскированная строка в формате "XXXX...XXXX" или "<REDACTED>"
+            если строка слишком короткая, или "<empty>" если пустая.
+    """
     if not s:
         return "<empty>"
     if len(s) <= keep * 2:
@@ -83,6 +124,14 @@ def mask_secret(s, keep=4):
 
 
 async def register_bot_commands(bot: Bot):
+    """Регистрирует команды бота в Telegram.
+
+    Устанавливает список команд, которые будут отображаться в меню
+    команд бота при вводе "/".
+
+    Args:
+        bot (Bot): Экземпляр Telegram бота.
+    """
     commands = [
         BotCommand(command="status", description="Показать статус WireGuard"),
         BotCommand(command="addclient", description="Добавить нового клиента"),
@@ -98,6 +147,15 @@ async def register_bot_commands(bot: Bot):
 
 # --- Handlers ---
 async def cb_stats(callback: CallbackQuery, wg: WGManager, um: UserManager):
+    """Обработчик callback для просмотра статистики клиента.
+
+    Обрабатывает нажатие на кнопку "📊 Статистика" в списке клиентов.
+
+    Args:
+        callback (CallbackQuery): Callback запрос от Telegram.
+        wg (WGManager): Менеджер WireGuard.
+        um (UserManager): Менеджер пользователей.
+    """
     if not um.is_user(callback.from_user.id):
         await callback.answer("Access denied.", show_alert=True)
         return
@@ -120,6 +178,15 @@ async def cb_stats(callback: CallbackQuery, wg: WGManager, um: UserManager):
 
 
 async def cmd_help(message: Message, wg: WGManager, um: UserManager):
+    """Обработчик команды /help.
+
+    Отправляет пользователю справку по доступным командам бота.
+
+    Args:
+        message (Message): Сообщение от пользователя.
+        wg (WGManager): Менеджер WireGuard (не используется).
+        um (UserManager): Менеджер пользователей для проверки доступа.
+    """
     if not um.is_user(message.from_user.id):
         await message.answer("Access denied.")
         return
@@ -134,8 +201,26 @@ async def cmd_help(message: Message, wg: WGManager, um: UserManager):
 
 
 async def cmd_status(message: Message, wg: WGManager, um: UserManager):
+    """Обработчик команды /status.
+
+    Отправляет пользователю статус интерфейса WireGuard и список пиров
+    с их статистикой.
+
+    Args:
+        message (Message): Сообщение от пользователя.
+        wg (WGManager): Менеджер WireGuard.
+        um (UserManager): Менеджер пользователей для проверки доступа.
+    """
+
     def format_bytes(val: str) -> str:
-        """Форматируем байты в KiB/MiB/..."""
+        """Форматирует количество байт в человекочитаемый вид.
+
+        Args:
+            val (str): Количество байт в виде строки.
+
+        Returns:
+            str: Отформатированная строка (например, "1.23 MiB").
+        """
         val = int(val)
         units = ["B", "KiB", "MiB", "GiB", "TiB"]
         size = float(val)
@@ -146,7 +231,14 @@ async def cmd_status(message: Message, wg: WGManager, um: UserManager):
         return f"{size:.2f} PiB"
 
     def format_handshake(ts: str) -> str:
-        """Преобразуем timestamp в человекочитаемый вид"""
+        """Преобразует timestamp последнего handshake в человекочитаемый вид.
+
+        Args:
+            ts (str): Unix timestamp в виде строки.
+
+        Returns:
+            str: Строка вида "Xm Ys ago" или "never" если timestamp равен 0.
+        """
         ts = int(ts)
         if ts == 0:
             return "never"
@@ -156,7 +248,16 @@ async def cmd_status(message: Message, wg: WGManager, um: UserManager):
         return f"{minutes}m {seconds}s ago"
 
     def parse_wg_dump(output: str) -> dict:
-        """Парсим вывод `wg show wg0 dump`"""
+        """Парсит вывод команды `wg show dump`.
+
+        Args:
+            output (str): Многострочный вывод команды wg dump.
+
+        Returns:
+            dict: Словарь с распарсенными данными:
+                - interface (dict): Информация об интерфейсе
+                - peers (list): Список словарей с информацией о пирах
+        """
         lines = [line.strip() for line in output.splitlines() if line.strip()]
         if not lines:
             return {}
@@ -220,6 +321,17 @@ async def cmd_status(message: Message, wg: WGManager, um: UserManager):
 async def cmd_addclient(
     message: Message, command: CommandObject, wg: WGManager, um: UserManager
 ):
+    """Обработчик команды /addclient.
+
+    Создаёт нового клиента WireGuard и отправляет конфигурационный файл
+    и QR-код пользователю.
+
+    Args:
+        message (Message): Сообщение от пользователя.
+        command (CommandObject): Объект команды с аргументами.
+        wg (WGManager): Менеджер WireGuard.
+        um (UserManager): Менеджер пользователей для проверки доступа.
+    """
     if not um.is_admin(message.from_user.id):
         await message.answer("Access denied.")
         return
@@ -253,6 +365,16 @@ async def cmd_addclient(
 async def cmd_removeclient(
     message: Message, command: CommandObject, wg: WGManager, um: UserManager
 ):
+    """Обработчик команды /removeclient.
+
+    Удаляет клиента WireGuard по имени.
+
+    Args:
+        message (Message): Сообщение от пользователя.
+        command (CommandObject): Объект команды с аргументами.
+        wg (WGManager): Менеджер WireGuard.
+        um (UserManager): Менеджер пользователей для проверки доступа.
+    """
     if not um.is_admin(message.from_user.id):
         await message.answer("Access denied.")
         return
@@ -272,6 +394,16 @@ async def cmd_removeclient(
 
 
 async def cmd_listclients(message: Message, wg: WGManager, um: UserManager):
+    """Обработчик команды /listclients.
+
+    Отправляет пользователю список всех клиентов WireGuard с кнопками
+    для просмотра статистики каждого клиента.
+
+    Args:
+        message (Message): Сообщение от пользователя.
+        wg (WGManager): Менеджер WireGuard.
+        um (UserManager): Менеджер пользователей для проверки доступа.
+    """
     if not um.is_user(message.from_user.id):
         await message.answer("Access denied.")
         return
@@ -298,6 +430,14 @@ async def cmd_listclients(message: Message, wg: WGManager, um: UserManager):
 
 # --- user management handlers ---
 async def cmd_listusers(message: Message, um: UserManager):
+    """Обработчик команды /listusers.
+
+    Отправляет администратору список всех пользователей бота с их ролями.
+
+    Args:
+        message (Message): Сообщение от пользователя.
+        um (UserManager): Менеджер пользователей.
+    """
     if not um.is_admin(message.from_user.id):
         await message.answer("Access denied.")
         return
@@ -309,6 +449,15 @@ async def cmd_listusers(message: Message, um: UserManager):
 
 
 async def cmd_adduser(message: Message, command: CommandObject, um: UserManager):
+    """Обработчик команды /adduser.
+
+    Добавляет нового пользователя бота с указанной ролью.
+
+    Args:
+        message (Message): Сообщение от пользователя.
+        command (CommandObject): Объект команды с аргументами (id и роль).
+        um (UserManager): Менеджер пользователей.
+    """
     if not um.is_admin(message.from_user.id):
         await message.answer("Access denied.")
         return
@@ -324,6 +473,15 @@ async def cmd_adduser(message: Message, command: CommandObject, um: UserManager)
 
 
 async def cmd_removeuser(message: Message, command: CommandObject, um: UserManager):
+    """Обработчик команды /removeuser.
+
+    Удаляет пользователя из списка пользователей бота.
+
+    Args:
+        message (Message): Сообщение от пользователя.
+        command (CommandObject): Объект команды с аргументом (id пользователя).
+        um (UserManager): Менеджер пользователей.
+    """
     if not um.is_admin(message.from_user.id):
         await message.answer("Access denied.")
         return
@@ -339,6 +497,11 @@ async def cmd_removeuser(message: Message, command: CommandObject, um: UserManag
 
 # --- main ---
 async def main():
+    """Главная функция бота.
+
+    Инициализирует логирование, загружает конфигурацию, создаёт менеджеры
+    и запускает Telegram бота с регистрацией всех обработчиков команд.
+    """
     parser = argparse.ArgumentParser()
     parser.add_argument("-c", "--config", default="config.yaml")
     parser.add_argument("-v", action="count", default=0)
