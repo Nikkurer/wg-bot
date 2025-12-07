@@ -152,6 +152,9 @@ async def register_bot_commands(bot: Bot):
         BotCommand(command="addclient", description="Добавить нового клиента"),
         BotCommand(command="removeclient", description="Удалить клиента"),
         BotCommand(command="listclients", description="Показать список клиентов"),
+        BotCommand(
+            command="syncconfig", description="Синхронизировать клиентов из конфига"
+        ),
         BotCommand(command="help", description="Справка по командам"),
         BotCommand(command="listusers", description="Показать пользователей"),
         BotCommand(command="adduser", description="Добавить пользователя"),
@@ -211,6 +214,7 @@ async def cmd_help(message: Message, wg: WGManager, um: UserManager):
         "/addclient <name> — создать клиента\n"
         "/removeclient <name> — удалить клиента\n"
         "/listclients — список клиентов\n"
+        "/syncconfig — синхронизировать из конфигов\n"
         "/help — это сообщение\n"
     )
 
@@ -510,6 +514,43 @@ async def cmd_removeuser(message: Message, command: CommandObject, um: UserManag
         await message.answer(f"❌ Ошибка: {e}")
 
 
+async def cmd_syncconfig(message: Message, wg: WGManager, um: UserManager):
+    """Обработчик команды /syncconfig.
+
+    Синхронизирует клиентов из всех конфигурационных файлов WireGuard
+    в директории, указанной в конфиге (WG_CONFIG_DIR).
+
+    Args:
+        message (Message): Сообщение от пользователя.
+        wg (WGManager): Менеджер WireGuard.
+        um (UserManager): Менеджер пользователей для проверки доступа.
+    """
+    if not um.is_admin(message.from_user.id):
+        await message.answer("Access denied.")
+        return
+
+    try:
+        result = wg.sync_from_config_dir()
+        text = (
+            f"✅ Синхронизация завершена:\n\n"
+            f"📁 Файлов обработано: {result.get('files_processed', 0)}\n"
+            f"📝 Создано: {result['created']}\n"
+            f"🔄 Обновлено: {result['updated']}\n"
+            f"❌ Ошибок: {len(result['errors'])}"
+        )
+        if result["errors"]:
+            text += "\n\nОшибки:\n" + "\n".join(f"• {e}" for e in result["errors"][:10])
+            if len(result["errors"]) > 10:
+                text += f"\n... и ещё {len(result['errors']) - 10} ошибок"
+        await message.answer(text)
+    except WGManagerError as e:
+        infoLog.error(f"Sync config error: {e}")
+        await message.answer(f"❌ Ошибка синхронизации: {e}")
+    except Exception as e:
+        infoLog.error(f"Unexpected error during sync: {traceback.format_exc()}")
+        await message.answer(f"❌ Неожиданная ошибка: {e}")
+
+
 # --- main ---
 async def main():
     """Главная функция бота.
@@ -543,6 +584,7 @@ async def main():
         cfg["CLIENT_DIR"],
         cfg["WG_SUBNET"],
         cfg.get("SERVER_PUBLIC_KEY"),
+        cfg.get("WG_CONFIG_DIR"),
     )
 
     bot = Bot(token=cfg["TELEGRAM_TOKEN"])
@@ -555,6 +597,7 @@ async def main():
         partial(cmd_removeclient, wg=wg, um=um), Command("removeclient")
     )
     dp.message.register(partial(cmd_listclients, wg=wg, um=um), Command("listclients"))
+    dp.message.register(partial(cmd_syncconfig, wg=wg, um=um), Command("syncconfig"))
 
     dp.message.register(partial(cmd_listusers, um=um), Command("listusers"))
     dp.message.register(partial(cmd_adduser, um=um), Command("adduser"))

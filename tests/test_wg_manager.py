@@ -346,3 +346,286 @@ class TestWGManager:
             peer_line = lines[1] if len(lines) > 1 else ""
             assert "<REDACTED>" in peer_line or "preshared_key" not in peer_line
 
+    def test_parse_config_peers_single_client(self, wg_manager):
+        """Тест: парсинг конфига с одним клиентом."""
+        config_content = """# BEGIN_PEER client1
+[Peer]
+PublicKey = test_pubkey_1
+AllowedIPs = 10.10.0.2/32
+PresharedKey = test_psk_1
+# END_PEER client1
+"""
+        clients = wg_manager._parse_config_peers(config_content)
+        assert len(clients) == 1
+        assert "client1" in clients
+        assert clients["client1"]["PublicKey"] == "test_pubkey_1"
+        assert clients["client1"]["AllowedIPs"] == "10.10.0.2/32"
+        assert clients["client1"]["PresharedKey"] == "test_psk_1"
+
+    def test_parse_config_peers_multiple_clients(self, wg_manager):
+        """Тест: парсинг конфига с несколькими клиентами."""
+        config_content = """# BEGIN_PEER client1
+[Peer]
+PublicKey = pubkey1
+AllowedIPs = 10.10.0.2/32
+# END_PEER client1
+
+# BEGIN_PEER client2
+[Peer]
+PublicKey = pubkey2
+AllowedIPs = 10.10.0.3/32
+PresharedKey = psk2
+# END_PEER client2
+"""
+        clients = wg_manager._parse_config_peers(config_content)
+        assert len(clients) == 2
+        assert "client1" in clients
+        assert "client2" in clients
+        assert clients["client1"]["PublicKey"] == "pubkey1"
+        assert clients["client2"]["PublicKey"] == "pubkey2"
+        assert "PresharedKey" not in clients["client1"]
+        assert clients["client2"]["PresharedKey"] == "psk2"
+
+    def test_parse_config_peers_no_clients(self, wg_manager):
+        """Тест: парсинг конфига без клиентов."""
+        config_content = "[Interface]\nPrivateKey = server_key\n"
+        clients = wg_manager._parse_config_peers(config_content)
+        assert len(clients) == 0
+
+    def test_parse_config_peers_malformed(self, wg_manager):
+        """Тест: парсинг конфига с неправильным форматом."""
+        # BEGIN_PEER без END_PEER
+        config_content = """# BEGIN_PEER client1
+[Peer]
+PublicKey = pubkey1
+"""
+        clients = wg_manager._parse_config_peers(config_content)
+        # Неполная секция не должна быть добавлена
+        assert len(clients) == 0
+
+    def test_sync_from_single_config_create_new(self, wg_manager, temp_dir):
+        """Тест: синхронизация создаёт нового клиента."""
+        config_path = os.path.join(temp_dir, "test.conf")
+        config_content = """# BEGIN_PEER newclient
+[Peer]
+PublicKey = new_pubkey
+AllowedIPs = 10.10.0.5/32
+PresharedKey = new_psk
+# END_PEER newclient
+"""
+        with open(config_path, "w", encoding="utf-8") as f:
+            f.write(config_content)
+
+        with patch.object(wg_manager, "_next_free_ip") as mock_next_ip:
+            mock_next_ip.return_value = "10.10.0.5/24"
+
+            result = wg_manager._sync_from_single_config(config_path)
+
+            assert result["created"] == 1
+            assert result["updated"] == 0
+            assert len(result["errors"]) == 0
+
+            # Проверяем, что метаданные созданы
+            meta_path = os.path.join(temp_dir, "newclient.json")
+            assert os.path.exists(meta_path)
+            with open(meta_path, "r", encoding="utf-8") as f:
+                meta = json.load(f)
+            assert meta["name"] == "newclient"
+            assert meta["pubkey"] == "new_pubkey"
+            assert meta["preshared_key"] == "new_psk"
+            assert meta["allowed_ips"] == "10.10.0.5/32"
+            assert meta["synced_from_config"] is True
+
+    def test_sync_from_single_config_update_existing(self, wg_manager, temp_dir):
+        """Тест: синхронизация обновляет существующего клиента."""
+        # Создаём существующего клиента
+        meta_path = os.path.join(temp_dir, "existing.json")
+        with open(meta_path, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "name": "existing",
+                    "pubkey": "old_pubkey",
+                    "client_ip": "10.10.0.2/24",
+                },
+                f,
+            )
+
+        config_path = os.path.join(temp_dir, "test.conf")
+        config_content = """# BEGIN_PEER existing
+[Peer]
+PublicKey = new_pubkey
+AllowedIPs = 10.10.0.2/32
+PresharedKey = new_psk
+# END_PEER existing
+"""
+        with open(config_path, "w", encoding="utf-8") as f:
+            f.write(config_content)
+
+        result = wg_manager._sync_from_single_config(config_path)
+
+        assert result["created"] == 0
+        assert result["updated"] == 1
+        assert len(result["errors"]) == 0
+
+        # Проверяем, что метаданные обновлены
+        with open(meta_path, "r", encoding="utf-8") as f:
+            meta = json.load(f)
+        assert meta["pubkey"] == "new_pubkey"
+        assert meta["preshared_key"] == "new_psk"
+        assert meta["synced_from_config"] is True
+
+    def test_sync_from_single_config_missing_pubkey(self, wg_manager, temp_dir):
+        """Тест: синхронизация обрабатывает клиента без PublicKey."""
+        config_path = os.path.join(temp_dir, "test.conf")
+        config_content = """# BEGIN_PEER invalid
+[Peer]
+AllowedIPs = 10.10.0.2/32
+# END_PEER invalid
+"""
+        with open(config_path, "w", encoding="utf-8") as f:
+            f.write(config_content)
+
+        result = wg_manager._sync_from_single_config(config_path)
+
+        assert result["created"] == 0
+        assert result["updated"] == 0
+        assert len(result["errors"]) == 1
+        assert "missing PublicKey" in result["errors"][0]
+
+    def test_sync_from_single_config_file_not_found(self, wg_manager):
+        """Тест: синхронизация несуществующего файла вызывает ошибку."""
+        with pytest.raises(WGManagerError, match="Config file not found"):
+            wg_manager._sync_from_single_config("/nonexistent/path.conf")
+
+    def test_sync_from_config_dir_single_file(self, wg_manager, temp_dir):
+        """Тест: синхронизация директории с одним конфигом."""
+        config_dir = os.path.join(temp_dir, "configs")
+        os.makedirs(config_dir)
+
+        config_path = os.path.join(config_dir, "wg0.conf")
+        config_content = """# BEGIN_PEER client1
+[Peer]
+PublicKey = pubkey1
+AllowedIPs = 10.10.0.2/32
+# END_PEER client1
+"""
+        with open(config_path, "w", encoding="utf-8") as f:
+            f.write(config_content)
+
+        with patch.object(wg_manager, "_next_free_ip") as mock_next_ip:
+            mock_next_ip.return_value = "10.10.0.2/24"
+            wg_manager.wg_config_dir = config_dir
+
+            result = wg_manager.sync_from_config_dir()
+
+            assert result["created"] == 1
+            assert result["updated"] == 0
+            assert result["files_processed"] == 1
+            assert len(result["errors"]) == 0
+
+    def test_sync_from_config_dir_multiple_files(self, wg_manager, temp_dir):
+        """Тест: синхронизация директории с несколькими конфигами."""
+        config_dir = os.path.join(temp_dir, "configs")
+        os.makedirs(config_dir)
+
+        # Создаём два конфига
+        config1_path = os.path.join(config_dir, "wg0.conf")
+        with open(config1_path, "w", encoding="utf-8") as f:
+            f.write("""# BEGIN_PEER client1
+[Peer]
+PublicKey = pubkey1
+AllowedIPs = 10.10.0.2/32
+# END_PEER client1
+""")
+
+        config2_path = os.path.join(config_dir, "wg1.conf")
+        with open(config2_path, "w", encoding="utf-8") as f:
+            f.write("""# BEGIN_PEER client2
+[Peer]
+PublicKey = pubkey2
+AllowedIPs = 10.10.0.3/32
+# END_PEER client2
+""")
+
+        with patch.object(wg_manager, "_next_free_ip") as mock_next_ip:
+            mock_next_ip.return_value = "10.10.0.2/24"
+            wg_manager.wg_config_dir = config_dir
+
+            result = wg_manager.sync_from_config_dir()
+
+            assert result["created"] == 2
+            assert result["updated"] == 0
+            assert result["files_processed"] == 2
+            assert len(result["errors"]) == 0
+
+    def test_sync_from_config_dir_no_conf_files(self, wg_manager, temp_dir):
+        """Тест: синхронизация директории без .conf файлов."""
+        config_dir = os.path.join(temp_dir, "configs")
+        os.makedirs(config_dir)
+
+        # Создаём файл не .conf
+        with open(os.path.join(config_dir, "readme.txt"), "w", encoding="utf-8") as f:
+            f.write("test")
+
+        wg_manager.wg_config_dir = config_dir
+
+        result = wg_manager.sync_from_config_dir()
+
+        assert result["created"] == 0
+        assert result["updated"] == 0
+        assert result["files_processed"] == 0
+        assert len(result["errors"]) > 0
+        assert "No .conf files found" in result["errors"][0]
+
+    def test_sync_from_config_dir_directory_not_found(self, wg_manager):
+        """Тест: синхронизация несуществующей директории вызывает ошибку."""
+        wg_manager.wg_config_dir = "/nonexistent/directory"
+        with pytest.raises(WGManagerError, match="Config directory not found"):
+            wg_manager.sync_from_config_dir()
+
+    def test_sync_from_config_dir_not_a_directory(self, wg_manager, temp_dir):
+        """Тест: синхронизация файла вместо директории вызывает ошибку."""
+        file_path = os.path.join(temp_dir, "not_a_dir")
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write("test")
+
+        wg_manager.wg_config_dir = file_path
+        with pytest.raises(WGManagerError, match="Path is not a directory"):
+            wg_manager.sync_from_config_dir()
+
+    def test_sync_from_config_dir_with_errors(self, wg_manager, temp_dir):
+        """Тест: синхронизация директории с ошибками в одном из файлов."""
+        config_dir = os.path.join(temp_dir, "configs")
+        os.makedirs(config_dir)
+
+        # Создаём валидный конфиг
+        config1_path = os.path.join(config_dir, "wg0.conf")
+        with open(config1_path, "w", encoding="utf-8") as f:
+            f.write("""# BEGIN_PEER client1
+[Peer]
+PublicKey = pubkey1
+AllowedIPs = 10.10.0.2/32
+# END_PEER client1
+""")
+
+        # Создаём конфиг с ошибкой (нет PublicKey)
+        config2_path = os.path.join(config_dir, "wg1.conf")
+        with open(config2_path, "w", encoding="utf-8") as f:
+            f.write("""# BEGIN_PEER client2
+[Peer]
+AllowedIPs = 10.10.0.3/32
+# END_PEER client2
+""")
+
+        with patch.object(wg_manager, "_next_free_ip") as mock_next_ip:
+            mock_next_ip.return_value = "10.10.0.2/24"
+            wg_manager.wg_config_dir = config_dir
+
+            result = wg_manager.sync_from_config_dir()
+
+            assert result["created"] == 1  # client1 создан
+            assert result["updated"] == 0
+            assert result["files_processed"] == 2
+            assert len(result["errors"]) == 1
+            assert "missing PublicKey" in result["errors"][0]
+

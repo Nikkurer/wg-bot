@@ -41,7 +41,7 @@ class WGManager:
     """
 
     def __init__(
-        self, wg_iface, client_dir, wg_subnet, server_public_key=None, logger=None
+        self, wg_iface, client_dir, wg_subnet, server_public_key=None, wg_config_dir=None, logger=None
     ):
         """Инициализирует менеджер WireGuard.
 
@@ -50,6 +50,7 @@ class WGManager:
             client_dir (str): Путь к директории для хранения конфигураций клиентов.
             wg_subnet (str): Подсеть WireGuard в формате CIDR (например, "10.10.0.0/24").
             server_public_key (str, optional): Публичный ключ сервера для клиентских конфигов.
+            wg_config_dir (str, optional): Путь к директории с конфигами WireGuard для синхронизации.
             logger (logging.Logger, optional): Логгер для записи событий.
 
         Raises:
@@ -60,6 +61,7 @@ class WGManager:
         self.client_dir = client_dir
         self.wg_subnet = ipaddress.ip_network(wg_subnet)
         self.server_public_key = server_public_key
+        self.wg_config_dir = wg_config_dir
 
         # --- logger setup ---
         self.logger = logger or logging.getLogger("wg_manager")
@@ -543,5 +545,269 @@ class WGManager:
         except OSError as e:
             self.logger.error(f"Cannot access client directory {self.client_dir}: {e}")
             raise WGManagerError(f"Cannot access client directory: {e}")
+
+        return clients
+
+    def sync_from_config_dir(self, config_dir=None):
+        """Синхронизирует клиентов из всех конфигурационных файлов WireGuard в директории.
+
+        Сканирует директорию с конфигами WireGuard и извлекает информацию о клиентах
+        из всех .conf файлов. Для каждого найденного клиента обновляет или создаёт метаданные.
+
+        Args:
+            config_dir (str, optional): Путь к директории с конфигами WireGuard.
+                Если не указан, используется self.wg_config_dir.
+
+        Returns:
+            dict: Словарь с результатами синхронизации:
+                - created (int): Количество созданных клиентов
+                - updated (int): Количество обновлённых клиентов
+                - errors (list): Список ошибок при обработке клиентов
+                - files_processed (int): Количество обработанных файлов
+
+        Raises:
+            WGManagerError: Если директория не найдена или произошла ошибка.
+        """
+        if config_dir is None:
+            config_dir = self.wg_config_dir
+
+        if not config_dir:
+            raise WGManagerError("WG_CONFIG_DIR not configured")
+
+        if not os.path.exists(config_dir):
+            raise WGManagerError(f"Config directory not found: {config_dir}")
+
+        if not os.path.isdir(config_dir):
+            raise WGManagerError(f"Path is not a directory: {config_dir}")
+
+        # Находим все .conf файлы в директории
+        config_files = []
+        try:
+            for filename in os.listdir(config_dir):
+                if filename.endswith(".conf"):
+                    config_files.append(os.path.join(config_dir, filename))
+        except OSError as e:
+            raise WGManagerError(f"Cannot access config directory: {e}")
+
+        if not config_files:
+            self.logger.warning(f"No .conf files found in {config_dir}")
+            return {
+                "created": 0,
+                "updated": 0,
+                "errors": ["No .conf files found"],
+                "files_processed": 0,
+            }
+
+        self.logger.info(f"Found {len(config_files)} config files to process")
+
+        total_created = 0
+        total_updated = 0
+        all_errors = []
+        files_processed = 0
+
+        # Обрабатываем каждый конфиг
+        for config_path in config_files:
+            try:
+                result = self._sync_from_single_config(config_path)
+                total_created += result["created"]
+                total_updated += result["updated"]
+                all_errors.extend(result["errors"])
+                files_processed += 1
+            except Exception as e:
+                error_msg = f"Failed to process {config_path}: {e}"
+                all_errors.append(error_msg)
+                self.logger.error(error_msg, exc_info=True)
+
+        self.logger.info(
+            f"Sync completed: {total_created} created, {total_updated} updated, "
+            f"{len(all_errors)} errors, {files_processed} files processed"
+        )
+
+        return {
+            "created": total_created,
+            "updated": total_updated,
+            "errors": all_errors,
+            "files_processed": files_processed,
+        }
+
+    def _sync_from_single_config(self, config_path):
+        """Синхронизирует клиентов из одного конфигурационного файла WireGuard.
+
+        Args:
+            config_path (str): Путь к конфигурационному файлу WireGuard.
+
+        Returns:
+            dict: Словарь с результатами синхронизации для одного файла.
+        """
+        if not os.path.exists(config_path):
+            raise WGManagerError(f"Config file not found: {config_path}")
+
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                config_content = f.read()
+        except Exception as e:
+            raise WGManagerError(f"Failed to read config file: {e}")
+
+        # Парсим секции клиентов
+        clients_data = self._parse_config_peers(config_content)
+
+        created = 0
+        updated = 0
+        errors = []
+
+        for name, peer_data in clients_data.items():
+            try:
+                pubkey = peer_data.get("PublicKey", "").strip()
+                allowed_ips = peer_data.get("AllowedIPs", "").strip()
+                preshared_key = peer_data.get("PresharedKey", "").strip()
+
+                if not pubkey:
+                    errors.append(f"Client {name}: missing PublicKey")
+                    continue
+
+                # Извлекаем IP адрес из AllowedIPs (берём первый IP)
+                client_ip = None
+                if allowed_ips:
+                    # AllowedIPs может содержать несколько IP через запятую
+                    first_ip = allowed_ips.split(",")[0].strip()
+                    # Если это IP с маской, убираем маску для определения адреса клиента
+                    if "/" in first_ip:
+                        ip_part = first_ip.split("/")[0]
+                        # Проверяем, является ли это IP из нашей подсети
+                        try:
+                            ip_obj = ipaddress.ip_address(ip_part)
+                            if ip_obj in self.wg_subnet:
+                                client_ip = first_ip
+                        except ValueError:
+                            pass
+
+                # Если IP не найден, пытаемся найти свободный
+                if not client_ip:
+                    try:
+                        client_ip = self._next_free_ip()
+                    except WGManagerError:
+                        errors.append(f"Client {name}: no free IP available")
+                        continue
+
+                meta_path = os.path.join(self.client_dir, f"{name}.json")
+
+                # Проверяем, существует ли клиент
+                if os.path.exists(meta_path):
+                    # Обновляем существующего клиента
+                    with open(meta_path, "r", encoding="utf-8") as f:
+                        meta = json.load(f)
+
+                    meta["pubkey"] = pubkey
+                    if client_ip:
+                        meta["client_ip"] = client_ip
+                    if preshared_key:
+                        meta["preshared_key"] = preshared_key
+                    meta["allowed_ips"] = allowed_ips
+                    meta["synced_from_config"] = True
+
+                    self._atomic_write(
+                        meta_path, json.dumps(meta, indent=2), mode=0o600
+                    )
+                    updated += 1
+                    self.logger.info(f"Updated client {name} from config")
+                else:
+                    # Создаём нового клиента (без приватного ключа)
+                    meta = {
+                        "name": name,
+                        "client_ip": client_ip,
+                        "pubkey": pubkey,
+                        "allowed_ips": allowed_ips,
+                        "synced_from_config": True,
+                    }
+                    if preshared_key:
+                        meta["preshared_key"] = preshared_key
+
+                    self._atomic_write(
+                        meta_path, json.dumps(meta, indent=2), mode=0o600
+                    )
+                    created += 1
+                    self.logger.info(f"Created client {name} from config (no private key)")
+
+            except Exception as e:
+                error_msg = f"Client {name}: {e}"
+                errors.append(error_msg)
+                self.logger.error(error_msg, exc_info=True)
+
+        self.logger.debug(
+            f"File {config_path}: {created} created, {updated} updated, {len(errors)} errors"
+        )
+
+        return {
+            "created": created,
+            "updated": updated,
+            "errors": errors,
+        }
+
+    def _parse_config_peers(self, config_content):
+        """Парсит секции пиров из конфига WireGuard.
+
+        Ищет секции между маркерами:
+        # BEGIN_PEER <имя>
+        ...
+        # END_PEER <имя>
+
+        Args:
+            config_content (str): Содержимое конфигурационного файла.
+
+        Returns:
+            dict: Словарь с данными клиентов:
+                {имя: {"PublicKey": "...", "AllowedIPs": "...", "PresharedKey": "..."}}
+        """
+        clients = {}
+        lines = config_content.splitlines()
+        i = 0
+
+        while i < len(lines):
+            line = lines[i].strip()
+
+            # Ищем начало секции клиента
+            if line.startswith("# BEGIN_PEER"):
+                # Извлекаем имя клиента
+                parts = line.split(None, 2)
+                if len(parts) < 3:
+                    i += 1
+                    continue
+
+                client_name = parts[2].strip()
+                if not client_name:
+                    i += 1
+                    continue
+
+                # Ищем параметры внутри секции
+                peer_data = {}
+                i += 1
+
+                while i < len(lines):
+                    current_line = lines[i].strip()
+
+                    # Проверяем конец секции
+                    if current_line.startswith("# END_PEER"):
+                        end_parts = current_line.split(None, 2)
+                        if len(end_parts) >= 3 and end_parts[2].strip() == client_name:
+                            clients[client_name] = peer_data
+                            break
+
+                    # Парсим параметры [Peer]
+                    if current_line.startswith("[Peer]"):
+                        i += 1
+                        continue
+
+                    # Парсим ключ=значение (формат: "PublicKey = ..." или "PublicKey=...")
+                    if "=" in current_line and not current_line.startswith("#"):
+                        key, value = current_line.split("=", 1)
+                        key = key.strip()
+                        value = value.strip()
+                        # Поддерживаем оба формата: "PublicKey" и "PublicKey ="
+                        if key in ["PublicKey", "AllowedIPs", "PresharedKey"]:
+                            peer_data[key] = value
+
+                    i += 1
+
+            i += 1
 
         return clients
