@@ -530,7 +530,7 @@ async def main():
         infoLog.error(f"Config error: {e}")
         sys.exit(1)
 
-    infoLog.info(f"Config loaded: {cfg}")
+    infoLog.info("Config loaded")
     debugLog.debug(
         f"Config details: WG={cfg['WG_INTERFACE']} DIR={cfg['CLIENT_DIR']} SUBNET={cfg['WG_SUBNET']} TOKEN={mask_secret(cfg['TELEGRAM_TOKEN'])}"
     )
