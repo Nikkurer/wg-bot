@@ -10,7 +10,6 @@ import traceback
 from functools import partial
 
 import qrcode
-import yaml
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command, CommandObject
 from aiogram.types import (
@@ -22,7 +21,7 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     Message,
 )
-
+from config import ConfigError, load_config
 from users import UserManager
 from wg_manager import WGManager, WGManagerError
 
@@ -85,42 +84,7 @@ def setup_logging(verbosity):
     debugLog.propagate = True
 
 
-# --- Config loader ---
-REQUIRED_KEYS = ["WG_INTERFACE", "CLIENT_DIR", "WG_SUBNET", "TELEGRAM_TOKEN"]
-
-
-def LoadConfig(path):
-    """Загружает конфигурацию из YAML файла.
-
-    Args:
-        path (str): Путь к файлу конфигурации.
-
-    Returns:
-        dict: Словарь с конфигурацией, содержащий обязательные ключи:
-            - WG_INTERFACE: Имя интерфейса WireGuard
-            - CLIENT_DIR: Директория для клиентских конфигов
-            - WG_SUBNET: Подсеть WireGuard
-            - TELEGRAM_TOKEN: Токен Telegram бота
-            - ALLOWED_USERS: Список ID супер-администраторов
-
-    Raises:
-        FileNotFoundError: Если файл конфигурации не найден или CLIENT_DIR
-            не существует.
-        KeyError: Если отсутствует обязательный ключ конфигурации.
-    """
-    if not path or not os.path.exists(path):
-        raise FileNotFoundError(f"Config file not found: {path}")
-    with open(path, "r", encoding="utf-8") as f:
-        cfg = yaml.safe_load(f) or {}
-    for k in REQUIRED_KEYS:
-        if k not in cfg:
-            raise KeyError(f"Missing required config key: {k}")
-    if not os.path.isdir(cfg["CLIENT_DIR"]):
-        raise FileNotFoundError(f"CLIENT_DIR not found: {cfg['CLIENT_DIR']}")
-    token = os.environ.get("TELEGRAM_TOKEN")
-    if token:
-        cfg["TELEGRAM_TOKEN"] = token
-    return cfg
+# --- Config loader (see config.py) ---
 
 
 # --- helpers ---
@@ -571,29 +535,28 @@ async def main():
     setup_logging(args.v)
 
     try:
-        cfg = LoadConfig(args.config)
-    except Exception as e:
+        bot_cfg = load_config(args.config)
+    except ConfigError as e:
         infoLog.error(f"Config error: {e}")
         sys.exit(1)
 
+    cfg = bot_cfg.as_dict()
     infoLog.info("Config loaded")
     debugLog.debug(
-        f"Config details: WG={cfg['WG_INTERFACE']} DIR={cfg['CLIENT_DIR']} SUBNET={cfg['WG_SUBNET']} TOKEN={mask_secret(cfg['TELEGRAM_TOKEN'])}"
+        f"Config details: WG={bot_cfg.wg_interface} DIR={bot_cfg.client_dir} "
+        f"SUBNET={bot_cfg.wg_subnet} TOKEN={mask_secret(bot_cfg.telegram_token)}"
     )
 
-    users_file = os.environ.get("USERS_FILE") or cfg.get("USERS_FILE", "users.json")
-    um = UserManager(
-        users_file, superadmins=[int(uid) for uid in cfg["ALLOWED_USERS"]]
-    )
+    um = UserManager(bot_cfg.users_file, superadmins=bot_cfg.allowed_users)
     wg = WGManager(
-        cfg["WG_INTERFACE"],
-        cfg["CLIENT_DIR"],
-        cfg["WG_SUBNET"],
-        cfg.get("SERVER_PUBLIC_KEY"),
-        cfg.get("WG_CONFIG_DIR"),
+        bot_cfg.wg_interface,
+        bot_cfg.client_dir,
+        bot_cfg.wg_subnet,
+        bot_cfg.server_public_key,
+        bot_cfg.wg_config_dir,
     )
 
-    bot = Bot(token=cfg["TELEGRAM_TOKEN"])
+    bot = Bot(token=bot_cfg.telegram_token)
     dp = Dispatcher()
 
     dp.message.register(partial(cmd_help, wg=wg, um=um), Command("help"))
