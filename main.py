@@ -22,7 +22,9 @@ from aiogram.types import (
     Message,
 )
 from config import ConfigError, load_config
+from service import ClientService, ClientServiceError
 from users import UserManager
+from wg_admin_client import WgAdminClient
 from wg_manager import WGManager, WGManagerError
 
 # --- Logging setup ---
@@ -105,6 +107,25 @@ def mask_secret(s, keep=4):
     if len(s) <= keep * 2:
         return "<REDACTED>"
     return s[:keep] + "..." + s[-keep:]
+
+
+async def send_client_conf_and_qr(
+    message: Message, name: str, conf_path: str, conf_text: str, client_ip: str
+):
+    """Отправляет .conf и QR-код клиента."""
+    await message.answer_document(
+        document=FSInputFile(conf_path, filename=f"{name}.conf"),
+        caption=f"Client '{name}' created with IP {client_ip}",
+    )
+    qr = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_Q)
+    qr.add_data(conf_text)
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="black", back_color="white")
+    bio = io.BytesIO()
+    img.save(bio, "PNG")
+    bio.seek(0)
+    photo_file = BufferedInputFile(bio.getvalue(), filename=f"{name}.png")
+    await message.answer_photo(photo=photo_file, caption=f"QR для клиента '{name}'")
 
 
 async def register_bot_commands(bot: Bot):
@@ -307,7 +328,7 @@ async def cmd_status(message: Message, wg: WGManager, um: UserManager):
 
 
 async def cmd_addclient(
-    message: Message, command: CommandObject, wg: WGManager, um: UserManager
+    message: Message, command: CommandObject, service: ClientService, um: UserManager
 ):
     """Обработчик команды /addclient.
 
@@ -317,7 +338,7 @@ async def cmd_addclient(
     Args:
         message (Message): Сообщение от пользователя.
         command (CommandObject): Объект команды с аргументами.
-        wg (WGManager): Менеджер WireGuard.
+        service (ClientService): Сервис управления клиентами через wg-admin.
         um (UserManager): Менеджер пользователей для проверки доступа.
     """
     if not um.is_admin(message.from_user.id):
@@ -328,22 +349,16 @@ async def cmd_addclient(
         return
     name = command.args.strip()
     try:
-        res = wg.add_client(name)
-        await message.answer_document(
-            document=FSInputFile(res["conf_path"], filename=f"{name}.conf"),
-            caption=f"Client '{name}' created with IP {res['client_ip']}",
+        res = await service.create_client(name)
+        await send_client_conf_and_qr(
+            message,
+            name,
+            res.record.conf_path,
+            res.conf_text,
+            res.record.client_ip,
         )
-        qr = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_Q)
-        qr.add_data(res["client_conf"])
-        qr.make(fit=True)
-        img = qr.make_image(fill_color="black", back_color="white")
-        bio = io.BytesIO()
-        img.save(bio, "PNG")
-        bio.seek(0)
-        photo_file = BufferedInputFile(bio.getvalue(), filename=f"{name}.png")
-        await message.answer_photo(photo=photo_file, caption=f"QR для клиента '{name}'")
-    except WGManagerError as e:
-        infoLog.error("WGManagerError: %s", getattr(e, "_full_stderr", str(e)))
+    except ClientServiceError as e:
+        infoLog.error("ClientServiceError: %s", e)
         await message.answer("Ошибка при добавлении клиента.")
     except Exception as e:
         infoLog.error(f"Unexpected error: {traceback.format_exc()}")
@@ -351,7 +366,7 @@ async def cmd_addclient(
 
 
 async def cmd_removeclient(
-    message: Message, command: CommandObject, wg: WGManager, um: UserManager
+    message: Message, command: CommandObject, service: ClientService, um: UserManager
 ):
     """Обработчик команды /removeclient.
 
@@ -360,7 +375,7 @@ async def cmd_removeclient(
     Args:
         message (Message): Сообщение от пользователя.
         command (CommandObject): Объект команды с аргументами.
-        wg (WGManager): Менеджер WireGuard.
+        service (ClientService): Сервис управления клиентами через wg-admin.
         um (UserManager): Менеджер пользователей для проверки доступа.
     """
     if not um.is_admin(message.from_user.id):
@@ -371,10 +386,10 @@ async def cmd_removeclient(
         return
     name = command.args.strip()
     try:
-        wg.remove_client(name)
+        await service.delete_client(name)
         await message.answer(f"Client '{name}' removed.")
-    except WGManagerError as e:
-        infoLog.error("WGManagerError: %s", getattr(e, "_full_stderr", str(e)))
+    except ClientServiceError as e:
+        infoLog.error("ClientServiceError: %s", e)
         await message.answer("Ошибка при удалении клиента.")
     except Exception as e:
         infoLog.error(f"Unexpected error: {traceback.format_exc()}")
@@ -548,6 +563,8 @@ async def main():
     )
 
     um = UserManager(bot_cfg.users_file, superadmins=bot_cfg.allowed_users)
+    wg_admin = WgAdminClient(bot_cfg.wg_admin_socket)
+    service = ClientService(bot_cfg, wg_admin)
     wg = WGManager(
         bot_cfg.wg_interface,
         bot_cfg.client_dir,
@@ -561,9 +578,9 @@ async def main():
 
     dp.message.register(partial(cmd_help, wg=wg, um=um), Command("help"))
     dp.message.register(partial(cmd_status, wg=wg, um=um), Command("status"))
-    dp.message.register(partial(cmd_addclient, wg=wg, um=um), Command("addclient"))
+    dp.message.register(partial(cmd_addclient, service=service, um=um), Command("addclient"))
     dp.message.register(
-        partial(cmd_removeclient, wg=wg, um=um), Command("removeclient")
+        partial(cmd_removeclient, service=service, um=um), Command("removeclient")
     )
     dp.message.register(partial(cmd_listclients, wg=wg, um=um), Command("listclients"))
     dp.message.register(partial(cmd_syncconfig, wg=wg, um=um), Command("syncconfig"))
@@ -578,7 +595,10 @@ async def main():
 
     await register_bot_commands(bot)
     infoLog.info("Bot starting...")
-    await dp.start_polling(bot)
+    try:
+        await dp.start_polling(bot)
+    finally:
+        await wg_admin.close()
 
 
 if __name__ == "__main__":
