@@ -71,7 +71,9 @@ def setup_logging(verbosity):
     root.addHandler(ch_console)
 
     # Обработчик для файла
-    fh = logging.FileHandler("wg_bot_debug.log")
+    log_dir = os.environ.get("WGBOT_LOG_DIR", ".")
+    log_path = os.path.join(log_dir, "wg_bot_debug.log")
+    fh = logging.FileHandler(log_path)
     fh.setLevel(file_level)
     fh.setFormatter(formatter)
     root.addHandler(fh)
@@ -115,6 +117,9 @@ def LoadConfig(path):
             raise KeyError(f"Missing required config key: {k}")
     if not os.path.isdir(cfg["CLIENT_DIR"]):
         raise FileNotFoundError(f"CLIENT_DIR not found: {cfg['CLIENT_DIR']}")
+    token = os.environ.get("TELEGRAM_TOKEN")
+    if token:
+        cfg["TELEGRAM_TOKEN"] = token
     return cfg
 
 
@@ -576,8 +581,9 @@ async def main():
         f"Config details: WG={cfg['WG_INTERFACE']} DIR={cfg['CLIENT_DIR']} SUBNET={cfg['WG_SUBNET']} TOKEN={mask_secret(cfg['TELEGRAM_TOKEN'])}"
     )
 
+    users_file = os.environ.get("USERS_FILE") or cfg.get("USERS_FILE", "users.json")
     um = UserManager(
-        "users.json", superadmins=[int(uid) for uid in cfg["ALLOWED_USERS"]]
+        users_file, superadmins=[int(uid) for uid in cfg["ALLOWED_USERS"]]
     )
     wg = WGManager(
         cfg["WG_INTERFACE"],

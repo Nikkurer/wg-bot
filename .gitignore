@@ -34,6 +34,7 @@ env/
 *~
 
 # Project specific
+.env
 wg_bot_debug.log
 users.json
 *.conf

@@ -1,0 +1,41 @@
+# wg-bot на RU-сервере. Требует запущенный wg-admin (systemd на хосте).
+#
+# Подготовка на хосте:
+#   sudo groupadd -f wg-admin
+#   sudo mkdir -p /var/lib/wg/clients /var/lib/wg/bot /etc/wg-bot
+#   sudo cp config.yaml.example /etc/wg-bot/config.yaml   # отредактировать
+#   sudo cp .env.example .env && edit .env               # TELEGRAM_TOKEN, WG_ADMIN_GID
+#   sudo chown -R 1000:1000 /var/lib/wg/clients /var/lib/wg/bot
+#
+# Запуск:
+#   docker compose up -d --build
+
+services:
+  wg-bot:
+    build: .
+    image: wg-bot:latest
+    container_name: wg-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      TELEGRAM_TOKEN: ${TELEGRAM_TOKEN:?set TELEGRAM_TOKEN in .env}
+      WGBOT_LOG_DIR: /app/state
+    group_add:
+      - "${WG_ADMIN_GID:?set WG_ADMIN_GID in .env}"
+    volumes:
+      # wg-admin Unix socket (read-only)
+      - ${WG_ADMIN_SOCKET_DIR:-/run/wg-admin}:/run/wg-admin:ro
+      # Client .conf / .json (private keys)
+      - ${CLIENT_DIR:-/var/lib/wg/clients}:/var/lib/wg/clients
+      # users.json, debug log
+      - ${BOT_STATE_DIR:-/var/lib/wg/bot}:/app/state
+      # Config without secrets (token via env)
+      - ${CONFIG_PATH:-./config.yaml}:/config/config.yaml:ro
+    command: ["python", "main.py", "-c", "/config/config.yaml"]
+    healthcheck:
+      test: ["CMD-SHELL", "test -S /run/wg-admin/wg-admin.sock"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s

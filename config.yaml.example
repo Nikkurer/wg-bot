@@ -1,0 +1,27 @@
+# Пример config.yaml для RU-сервера (wg-install + wg-admin + wg-bot в Docker)
+# Скопируйте на сервер: /etc/wg-bot/config.yaml
+
+WG_INTERFACE: wg-ru-clients
+WG_SUBNET: "10.66.66.0/24"
+# WG_SUBNET_V6: "fd66:66::/64"          # v2: dual-stack
+
+CLIENT_DIR: /var/lib/wg/clients
+USERS_FILE: /app/state/users.json
+
+# Параметры client .conf (v2)
+# SERVER_PUBLIC_KEY: "<wg show wg-ru-clients public-key>"
+# SERVER_ENDPOINT: "vpn.example.com"
+# WG_CLIENT_PORT: 443
+# WG_MTU: 1420
+# WG_DNS: "10.66.66.1"
+# CLIENT_ALLOWED_IPS: "0.0.0.0/0, ::/0"
+# PERSISTENT_KEEPALIVE: 25
+
+# wg-admin Unix socket (путь внутри контейнера = mount из хоста)
+# WG_ADMIN_SOCKET: /run/wg-admin/wg-admin.sock
+
+# TELEGRAM_TOKEN — лучше передать через env (см. .env), не хранить в файле
+TELEGRAM_TOKEN: "REPLACE_ME_OR_USE_ENV"
+
+ALLOWED_USERS:
+  - 123456789

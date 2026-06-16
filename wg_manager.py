@@ -418,7 +418,7 @@ class WGManager:
             raise WGManagerError(f"Failed to remove client files: {e}")
 
         return True
-
+    
     def peer_stats(self, name):
         """Возвращает статистику подключения для клиента.
 
@@ -665,21 +665,36 @@ class WGManager:
                     errors.append(f"Client {name}: missing PublicKey")
                     continue
 
-                # Извлекаем IP адрес из AllowedIPs (берём первый IP)
+                # Извлекаем IP адрес из AllowedIPs
+                # Ищем первый IP, который принадлежит подсети WireGuard
                 client_ip = None
                 if allowed_ips:
                     # AllowedIPs может содержать несколько IP через запятую
-                    first_ip = allowed_ips.split(",")[0].strip()
-                    # Если это IP с маской, убираем маску для определения адреса клиента
-                    if "/" in first_ip:
-                        ip_part = first_ip.split("/")[0]
-                        # Проверяем, является ли это IP из нашей подсети
-                        try:
-                            ip_obj = ipaddress.ip_address(ip_part)
-                            if ip_obj in self.wg_subnet:
-                                client_ip = first_ip
-                        except ValueError:
-                            pass
+                    # Перебираем все IP и ищем первый, который из нашей подсети
+                    for ip_str in allowed_ips.split(","):
+                        ip_str = ip_str.strip()
+                        if not ip_str:
+                            continue
+                        # Если это IP с маской, проверяем принадлежность к подсети
+                        if "/" in ip_str:
+                            ip_part = ip_str.split("/")[0]
+                            try:
+                                ip_obj = ipaddress.ip_address(ip_part)
+                                if ip_obj in self.wg_subnet:
+                                    client_ip = ip_str
+                                    break  # Нашли подходящий IP, останавливаемся
+                            except ValueError:
+                                continue
+                        else:
+                            # IP без маски - проверяем как есть
+                            try:
+                                ip_obj = ipaddress.ip_address(ip_str)
+                                if ip_obj in self.wg_subnet:
+                                    # Добавляем маску /32 для одиночного IP
+                                    client_ip = f"{ip_str}/32"
+                                    break
+                            except ValueError:
+                                continue
 
                 # Если IP не найден, пытаемся найти свободный
                 if not client_ip:
@@ -726,7 +741,9 @@ class WGManager:
                         meta_path, json.dumps(meta, indent=2), mode=0o600
                     )
                     created += 1
-                    self.logger.info(f"Created client {name} from config (no private key)")
+                    self.logger.info(
+                        f"Created client {name} from config (no private key)"
+                    )
 
             except Exception as e:
                 error_msg = f"Client {name}: {e}"
