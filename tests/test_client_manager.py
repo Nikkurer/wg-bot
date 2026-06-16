@@ -27,12 +27,7 @@ def bot_config(tmp_path):
 
 @pytest.fixture
 def manager(bot_config):
-    with patch("client_manager.os.getuid", return_value=1000), patch(
-        "client_manager.os.makedirs"
-    ), patch("client_manager.os.stat") as mock_stat:
-        mock_stat.return_value.st_uid = 1000
-        mock_stat.return_value.st_mode = 0o700
-        return ClientManager(bot_config)
+    return ClientManager(bot_config, verify_dir=False)
 
 
 class TestClientManager:

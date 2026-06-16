@@ -35,7 +35,13 @@ class ClientRecord:
 class ClientManager:
     """Keygen, IP allocation, client conf и файлы в CLIENT_DIR."""
 
-    def __init__(self, cfg: BotConfig, logger: Optional[logging.Logger] = None):
+    def __init__(
+        self,
+        cfg: BotConfig,
+        logger: Optional[logging.Logger] = None,
+        *,
+        verify_dir: bool = True,
+    ):
         self.cfg = cfg
         self.client_dir = cfg.client_dir
         self.wg_subnet = ipaddress.ip_network(cfg.wg_subnet)
@@ -45,7 +51,8 @@ class ClientManager:
         self.logger = logger or logging.getLogger("client_manager")
 
         os.makedirs(self.client_dir, exist_ok=True)
-        self._check_client_dir()
+        if verify_dir:
+            self._check_client_dir()
 
     def _check_client_dir(self) -> None:
         uid = os.getuid()
