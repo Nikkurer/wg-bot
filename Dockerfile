@@ -20,7 +20,7 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev
 
-COPY main.py wg_manager.py users.py ./
+COPY main.py config.py client_manager.py wg_admin_client.py service.py users.py ./
 
 RUN useradd --create-home --uid 1000 --shell /usr/sbin/nologin wgbot \
     && mkdir -p /var/lib/wg/clients /app/state \

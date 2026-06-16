@@ -35,7 +35,10 @@ docker compose up -d --build
 | Модуль | Назначение |
 |--------|------------|
 | `main.py` | Telegram (aiogram), handlers |
-| `wg_manager.py` | WireGuard ops (v1; заменяется на wg-admin client в v2) |
+| `config.py` | Загрузка конфигурации |
+| `wg_admin_client.py` | HTTP-клиент wg-admin (Unix socket) |
+| `client_manager.py` | Keygen, IP, client `.conf`, файлы |
+| `service.py` | Orchestration create/delete/rotate |
 | `users.py` | RBAC операторов |
 
 Тесты

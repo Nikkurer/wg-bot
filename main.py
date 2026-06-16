@@ -26,7 +26,6 @@ from config import BotConfig, ConfigError, load_config
 from service import ClientService, ClientServiceError
 from users import UserManager
 from wg_admin_client import DriftReport, WgAdminClient, WgAdminError
-from wg_manager import WGManager, WGManagerError
 
 # --- Logging setup ---
 infoLog = logging.getLogger("wg_bot_info")
@@ -548,43 +547,6 @@ async def cmd_removeuser(message: Message, command: CommandObject, um: UserManag
         await message.answer(f"❌ Ошибка: {e}")
 
 
-async def cmd_syncconfig(message: Message, wg: WGManager, um: UserManager):
-    """Обработчик команды /syncconfig.
-
-    Синхронизирует клиентов из всех конфигурационных файлов WireGuard
-    в директории, указанной в конфиге (WG_CONFIG_DIR).
-
-    Args:
-        message (Message): Сообщение от пользователя.
-        wg (WGManager): Менеджер WireGuard.
-        um (UserManager): Менеджер пользователей для проверки доступа.
-    """
-    if not um.is_admin(message.from_user.id):
-        await message.answer("Access denied.")
-        return
-
-    try:
-        result = wg.sync_from_config_dir()
-        text = (
-            f"✅ Синхронизация завершена:\n\n"
-            f"📁 Файлов обработано: {result.get('files_processed', 0)}\n"
-            f"📝 Создано: {result['created']}\n"
-            f"🔄 Обновлено: {result['updated']}\n"
-            f"❌ Ошибок: {len(result['errors'])}"
-        )
-        if result["errors"]:
-            text += "\n\nОшибки:\n" + "\n".join(f"• {e}" for e in result["errors"][:10])
-            if len(result["errors"]) > 10:
-                text += f"\n... и ещё {len(result['errors']) - 10} ошибок"
-        await message.answer(text)
-    except WGManagerError as e:
-        infoLog.error(f"Sync config error: {e}")
-        await message.answer(f"❌ Ошибка синхронизации: {e}")
-    except Exception as e:
-        infoLog.error(f"Unexpected error during sync: {traceback.format_exc()}")
-        await message.answer(f"❌ Неожиданная ошибка: {e}")
-
-
 # --- main ---
 async def main():
     """Главная функция бота.
@@ -605,7 +567,6 @@ async def main():
         infoLog.error(f"Config error: {e}")
         sys.exit(1)
 
-    cfg = bot_cfg.as_dict()
     infoLog.info("Config loaded")
     debugLog.debug(
         f"Config details: WG={bot_cfg.wg_interface} DIR={bot_cfg.client_dir} "
@@ -615,13 +576,6 @@ async def main():
     um = UserManager(bot_cfg.users_file, superadmins=bot_cfg.allowed_users)
     wg_admin = WgAdminClient(bot_cfg.wg_admin_socket)
     service = ClientService(bot_cfg, wg_admin)
-    wg = WGManager(
-        bot_cfg.wg_interface,
-        bot_cfg.client_dir,
-        bot_cfg.wg_subnet,
-        bot_cfg.server_public_key,
-        bot_cfg.wg_config_dir,
-    )
 
     bot = Bot(token=bot_cfg.telegram_token)
     dp = Dispatcher()
@@ -641,7 +595,6 @@ async def main():
     dp.message.register(
         partial(cmd_rotateclient, service=service, um=um), Command("rotateclient")
     )
-    dp.message.register(partial(cmd_syncconfig, wg=wg, um=um), Command("syncconfig"))
 
     dp.message.register(partial(cmd_listusers, um=um), Command("listusers"))
     dp.message.register(partial(cmd_adduser, um=um), Command("adduser"))

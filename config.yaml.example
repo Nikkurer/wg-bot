@@ -25,6 +25,3 @@ TELEGRAM_TOKEN: "REPLACE_ME_OR_USE_ENV"
 
 ALLOWED_USERS:
   - 123456789
-
-# v1 legacy (до удаления wg_manager)
-# WG_CONFIG_DIR: /etc/wireguard

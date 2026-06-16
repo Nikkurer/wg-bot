@@ -5,7 +5,9 @@
 ## Структура
 
 - `test_users.py` - тесты для модуля `users.py` (UserManager)
-- `test_wg_manager.py` - тесты для модуля `wg_manager.py` (WGManager)
+- `test_client_manager.py` - keygen, IP allocation, client conf
+- `test_service.py` - orchestration create/delete/rotate
+- `test_wg_admin_client.py` - HTTP-клиент wg-admin API
 - `conftest.py` - конфигурация pytest и общие фикстуры
 
 ## Установка зависимостей
