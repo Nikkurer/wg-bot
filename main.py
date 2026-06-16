@@ -25,7 +25,7 @@ from aiogram.types import (
 from config import BotConfig, ConfigError, load_config
 from service import ClientService, ClientServiceError
 from users import UserManager
-from wg_admin_client import WgAdminClient, WgAdminError
+from wg_admin_client import DriftReport, WgAdminClient, WgAdminError
 from wg_manager import WGManager, WGManagerError
 
 # --- Logging setup ---
@@ -115,6 +115,41 @@ def format_handshake(ts: Optional[int]) -> str:
     return f"{minutes}m {seconds}s ago"
 
 
+def format_drift_report(report: DriftReport) -> str:
+    """Форматирует отчёт drift в текст для Telegram."""
+    if report.in_sync:
+        return "✅ Drift check: storage и WireGuard совпадают (in sync)."
+
+    lines = ["⚠️ Drift detected — storage и WireGuard расходятся:", ""]
+
+    if report.only_in_storage:
+        lines.append("📦 Только в storage wg-admin:")
+        for p in report.only_in_storage:
+            ips = ", ".join(p.allowed_ips) or "—"
+            lines.append(f"  • {p.public_key[:16]}... ({ips})")
+        lines.append("")
+
+    if report.only_in_wireguard:
+        lines.append("🔌 Только в WireGuard runtime:")
+        for p in report.only_in_wireguard:
+            ips = ", ".join(p.allowed_ips) or "—"
+            lines.append(f"  • {p.public_key[:16]}... ({ips})")
+        lines.append("")
+
+    if report.mismatch:
+        lines.append("🔀 Расхождение полей:")
+        for m in report.mismatch:
+            s_ips = ", ".join(m.storage.allowed_ips) or "—"
+            w_ips = ", ".join(m.wireguard.allowed_ips) or "—"
+            lines.append(
+                f"  • {m.public_key[:16]}...\n"
+                f"    storage: {s_ips}\n"
+                f"    wireguard: {w_ips}"
+            )
+
+    return "\n".join(lines)
+
+
 def mask_secret(s, keep=4):
     """Маскирует секретную строку, оставляя видимыми только начало и конец.
 
@@ -167,8 +202,9 @@ async def register_bot_commands(bot: Bot):
         BotCommand(command="addclient", description="Добавить нового клиента"),
         BotCommand(command="removeclient", description="Удалить клиента"),
         BotCommand(command="listclients", description="Показать список клиентов"),
+        BotCommand(command="drift", description="Проверить drift storage vs WireGuard"),
         BotCommand(
-            command="syncconfig", description="Синхронизировать клиентов из конфига"
+            command="rotateclient", description="Ротация ключей клиента (новый conf/QR)"
         ),
         BotCommand(command="help", description="Справка по командам"),
         BotCommand(command="listusers", description="Показать пользователей"),
@@ -222,7 +258,8 @@ async def cmd_help(message: Message, um: UserManager):
         "/addclient <name> — создать клиента\n"
         "/removeclient <name> — удалить клиента\n"
         "/listclients — список клиентов\n"
-        "/syncconfig — синхронизировать из конфигов\n"
+        "/drift — проверка drift wg-admin vs WireGuard\n"
+        "/rotateclient <name> — ротация ключей клиента\n"
         "/help — это сообщение\n"
     )
 
@@ -363,6 +400,85 @@ async def cmd_listclients(message: Message, service: ClientService, um: UserMana
             await message.answer(text, reply_markup=kb)
     except ClientServiceError as e:
         await message.answer(f"Failed: {e}")
+
+
+async def cmd_drift(message: Message, wg_admin: WgAdminClient, um: UserManager):
+    """Обработчик команды /drift."""
+    if not um.is_admin(message.from_user.id):
+        await message.answer("Access denied.")
+        return
+    try:
+        report = await wg_admin.detect_drift()
+        await message.answer(format_drift_report(report))
+    except WgAdminError as e:
+        infoLog.error("Drift check failed: %s", e)
+        await message.answer(f"❌ Ошибка drift check: {e}")
+
+
+async def cmd_rotateclient(
+    message: Message, command: CommandObject, service: ClientService, um: UserManager
+):
+    """Обработчик команды /rotateclient — запрос подтверждения."""
+    if not um.is_admin(message.from_user.id):
+        await message.answer("Access denied.")
+        return
+    if not command.args:
+        await message.answer("Usage: /rotateclient <name>")
+        return
+    name = command.args.strip()
+    if not service.clients.name_exists(name):
+        await message.answer(f"Client '{name}' not found.")
+        return
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ Подтвердить", callback_data=f"rotate:confirm:{name}"
+                ),
+                InlineKeyboardButton(text="❌ Отмена", callback_data="rotate:cancel"),
+            ]
+        ]
+    )
+    await message.answer(
+        f"⚠️ Ротация ключей для клиента '{name}'?\n\n"
+        "После подтверждения старый .conf и QR перестанут работать.",
+        reply_markup=kb,
+    )
+
+
+async def cb_rotate(callback: CallbackQuery, service: ClientService, um: UserManager):
+    """Подтверждение или отмена ротации ключей."""
+    if not um.is_admin(callback.from_user.id):
+        await callback.answer("Access denied.", show_alert=True)
+        return
+
+    if callback.data == "rotate:cancel":
+        await callback.message.edit_text("Ротация отменена.")
+        await callback.answer()
+        return
+
+    if not callback.data.startswith("rotate:confirm:"):
+        await callback.answer()
+        return
+
+    name = callback.data.split(":", 2)[2]
+    try:
+        res = await service.rotate_client(name)
+        await callback.message.edit_text(
+            f"✅ Ключи клиента '{name}' обновлены.\n"
+            "⚠️ Старый .conf недействителен — используйте новый файл и QR ниже."
+        )
+        await send_client_conf_and_qr(
+            callback.message,
+            name,
+            res.record.conf_path,
+            res.conf_text,
+            res.record.client_ip,
+        )
+        await callback.answer()
+    except ClientServiceError as e:
+        infoLog.error("Rotate failed for %s: %s", name, e)
+        await callback.answer(str(e), show_alert=True)
 
 
 # --- user management handlers ---
@@ -521,6 +637,10 @@ async def main():
     dp.message.register(
         partial(cmd_listclients, service=service, um=um), Command("listclients")
     )
+    dp.message.register(partial(cmd_drift, wg_admin=wg_admin, um=um), Command("drift"))
+    dp.message.register(
+        partial(cmd_rotateclient, service=service, um=um), Command("rotateclient")
+    )
     dp.message.register(partial(cmd_syncconfig, wg=wg, um=um), Command("syncconfig"))
 
     dp.message.register(partial(cmd_listusers, um=um), Command("listusers"))
@@ -529,6 +649,9 @@ async def main():
 
     dp.callback_query.register(
         partial(cb_stats, service=service, um=um), F.data.startswith("stats:")
+    )
+    dp.callback_query.register(
+        partial(cb_rotate, service=service, um=um), F.data.startswith("rotate:")
     )
 
     await register_bot_commands(bot)
