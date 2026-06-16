@@ -8,6 +8,7 @@ import os
 import sys
 import traceback
 from functools import partial
+from typing import Optional
 
 import qrcode
 from aiogram import Bot, Dispatcher, F
@@ -21,10 +22,10 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     Message,
 )
-from config import ConfigError, load_config
+from config import BotConfig, ConfigError, load_config
 from service import ClientService, ClientServiceError
 from users import UserManager
-from wg_admin_client import WgAdminClient
+from wg_admin_client import WgAdminClient, WgAdminError
 from wg_manager import WGManager, WGManagerError
 
 # --- Logging setup ---
@@ -90,6 +91,30 @@ def setup_logging(verbosity):
 
 
 # --- helpers ---
+def format_bytes(val: int) -> str:
+    """Форматирует количество байт в человекочитаемый вид."""
+    units = ["B", "KiB", "MiB", "GiB", "TiB"]
+    size = float(val)
+    for u in units:
+        if size < 1024:
+            return f"{size:.2f} {u}"
+        size /= 1024
+    return f"{size:.2f} PiB"
+
+
+def format_handshake(ts: Optional[int]) -> str:
+    """Преобразует timestamp последнего handshake в человекочитаемый вид."""
+    if not ts:
+        return "never"
+    dt = datetime.datetime.fromtimestamp(ts)
+    ago = datetime.datetime.now() - dt
+    minutes, seconds = divmod(ago.seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}h {minutes}m ago"
+    return f"{minutes}m {seconds}s ago"
+
+
 def mask_secret(s, keep=4):
     """Маскирует секретную строку, оставляя видимыми только начало и конец.
 
@@ -154,47 +179,40 @@ async def register_bot_commands(bot: Bot):
 
 
 # --- Handlers ---
-async def cb_stats(callback: CallbackQuery, wg: WGManager, um: UserManager):
-    """Обработчик callback для просмотра статистики клиента.
-
-    Обрабатывает нажатие на кнопку "📊 Статистика" в списке клиентов.
-
-    Args:
-        callback (CallbackQuery): Callback запрос от Telegram.
-        wg (WGManager): Менеджер WireGuard.
-        um (UserManager): Менеджер пользователей.
-    """
+async def cb_stats(callback: CallbackQuery, service: ClientService, um: UserManager):
+    """Обработчик callback для просмотра статистики клиента."""
     if not um.is_user(callback.from_user.id):
         await callback.answer("Access denied.", show_alert=True)
         return
 
     try:
         name = callback.data.split(":", 1)[1]
-        stats = wg.peer_stats(name)
+        clients = await service.list_clients_merged()
+        client = next((c for c in clients if c["name"] == name), None)
+        if not client:
+            await callback.answer("Client not found.", show_alert=True)
+            return
+        ip_display = client["ip"]
+        if client.get("ip_v6"):
+            ip_display = f"{client['ip']}, {client['ip_v6']}"
         text = (
             f"📊 Статистика для {name}:\n\n"
-            f"Endpoint: {stats['endpoint']}\n"
-            f"Allowed IPs: {stats['allowed_ips']}\n"
-            f"Handshake: {stats['latest_handshake']}\n"
-            f"RX: {stats['rx_bytes']} bytes\n"
-            f"TX: {stats['tx_bytes']} bytes\n"
+            f"Endpoint: {client['endpoint'] or '—'}\n"
+            f"IP: {ip_display}\n"
+            f"Handshake: {format_handshake(client['latest_handshake'])}\n"
+            f"RX: {format_bytes(client['transfer_rx'])}\n"
+            f"TX: {format_bytes(client['transfer_tx'])}\n"
         )
         await callback.message.answer(text)
         await callback.answer()
+    except ClientServiceError as e:
+        await callback.answer(f"Ошибка: {e}", show_alert=True)
     except Exception as e:
         await callback.answer(f"Ошибка: {e}", show_alert=True)
 
 
-async def cmd_help(message: Message, wg: WGManager, um: UserManager):
-    """Обработчик команды /help.
-
-    Отправляет пользователю справку по доступным командам бота.
-
-    Args:
-        message (Message): Сообщение от пользователя.
-        wg (WGManager): Менеджер WireGuard (не используется).
-        um (UserManager): Менеджер пользователей для проверки доступа.
-    """
+async def cmd_help(message: Message, um: UserManager):
+    """Обработчик команды /help."""
     if not um.is_user(message.from_user.id):
         await message.answer("Access denied.")
         return
@@ -209,119 +227,37 @@ async def cmd_help(message: Message, wg: WGManager, um: UserManager):
     )
 
 
-async def cmd_status(message: Message, wg: WGManager, um: UserManager):
-    """Обработчик команды /status.
-
-    Отправляет пользователю статус интерфейса WireGuard и список пиров
-    с их статистикой.
-
-    Args:
-        message (Message): Сообщение от пользователя.
-        wg (WGManager): Менеджер WireGuard.
-        um (UserManager): Менеджер пользователей для проверки доступа.
-    """
-
-    def format_bytes(val: str) -> str:
-        """Форматирует количество байт в человекочитаемый вид.
-
-        Args:
-            val (str): Количество байт в виде строки.
-
-        Returns:
-            str: Отформатированная строка (например, "1.23 MiB").
-        """
-        val = int(val)
-        units = ["B", "KiB", "MiB", "GiB", "TiB"]
-        size = float(val)
-        for u in units:
-            if size < 1024:
-                return f"{size:.2f} {u}"
-            size /= 1024
-        return f"{size:.2f} PiB"
-
-    def format_handshake(ts: str) -> str:
-        """Преобразует timestamp последнего handshake в человекочитаемый вид.
-
-        Args:
-            ts (str): Unix timestamp в виде строки.
-
-        Returns:
-            str: Строка вида "Xm Ys ago" или "never" если timestamp равен 0.
-        """
-        ts = int(ts)
-        if ts == 0:
-            return "never"
-        dt = datetime.datetime.fromtimestamp(ts)
-        ago = datetime.datetime.now() - dt
-        minutes, seconds = divmod(ago.seconds, 60)
-        return f"{minutes}m {seconds}s ago"
-
-    def parse_wg_dump(output: str) -> dict:
-        """Парсит вывод команды `wg show dump`.
-
-        Args:
-            output (str): Многострочный вывод команды wg dump.
-
-        Returns:
-            dict: Словарь с распарсенными данными:
-                - interface (dict): Информация об интерфейсе
-                - peers (list): Список словарей с информацией о пирах
-        """
-        lines = [line.strip() for line in output.splitlines() if line.strip()]
-        if not lines:
-            return {}
-
-        result = {"interface": {}, "peers": []}
-
-        # интерфейс (первая строка)
-        iface = lines[0].split("\t")
-        result["interface"] = {
-            "private_key": iface[0],
-            "public_key": iface[1],
-            "listen_port": iface[2],
-            "fwmark": iface[3],
-        }
-
-        # остальные строки — клиенты
-        for line in lines[1:]:
-            cols = line.split("\t")
-            peer = {
-                "public_key": cols[0],
-                "preshared_key": cols[1],
-                "endpoint": cols[2],
-                "allowed_ips": cols[3],
-                "latest_handshake": format_handshake(cols[4]),
-                "transfer_rx": format_bytes(cols[5]),
-                "transfer_tx": format_bytes(cols[6]),
-                "keepalive": cols[7],
-            }
-            result["peers"].append(peer)
-
-        return result
-
+async def cmd_status(
+    message: Message, wg_admin: WgAdminClient, cfg: BotConfig, um: UserManager
+):
+    """Обработчик команды /status."""
     if not um.is_user(message.from_user.id):
         await message.answer("Access denied.")
         return
     try:
-        raw_output = wg.status()  # должен вызывать `wg show wg0 dump`
-        parsed = parse_wg_dump(raw_output)
-
+        status = await wg_admin.interface_status()
         text = [
-            "🔐 Interface: <b>wg0</b>",
-            f"📡 Port: {parsed['interface']['listen_port']}",
+            f"🔐 Interface: <b>{html.escape(status.name or cfg.wg_interface)}</b>",
+            f"📡 State: {html.escape(status.state or 'unknown')}",
             "",
             "👥 Peers:",
         ]
-        for p in parsed["peers"]:
+        if not status.peers:
+            text.append("— нет пиров")
+        for p in status.peers:
+            label = html.escape(p.description or p.public_key[:12] + "...")
             text.append(
-                f"— <code>{html.escape(p['public_key'])}</code>\n"
-                f"   ➤ Endpoint: {html.escape(p['endpoint'])}\n"
-                f"   ➤ IPs: {html.escape(p['allowed_ips'])}\n"
-                f"   ➤ Last handshake: {p['latest_handshake']}\n"
-                f"   ➤ Traffic: ⬇️ {p['transfer_rx']} | ⬆️ {p['transfer_tx']}"
+                f"— <b>{label}</b> <code>{html.escape(p.public_key[:16])}...</code>\n"
+                f"   ➤ Endpoint: {html.escape(p.endpoint or '—')}\n"
+                f"   ➤ IPs: {html.escape(', '.join(p.allowed_ips) or '—')}\n"
+                f"   ➤ Last handshake: {format_handshake(p.latest_handshake)}\n"
+                f"   ➤ Traffic: ⬇️ {format_bytes(p.transfer_rx)} | ⬆️ {format_bytes(p.transfer_tx)}"
             )
 
         await message.answer("\n".join(text), parse_mode="HTML")
+    except WgAdminError as e:
+        infoLog.error(f"Status failed: {e}")
+        await message.answer(f"Error: {e}")
     except Exception as e:
         infoLog.error(f"Status failed: {e}")
         await message.answer(f"Error: {e}")
@@ -396,27 +332,25 @@ async def cmd_removeclient(
         await message.answer(f"Unexpected error: {e}")
 
 
-async def cmd_listclients(message: Message, wg: WGManager, um: UserManager):
-    """Обработчик команды /listclients.
-
-    Отправляет пользователю список всех клиентов WireGuard с кнопками
-    для просмотра статистики каждого клиента.
-
-    Args:
-        message (Message): Сообщение от пользователя.
-        wg (WGManager): Менеджер WireGuard.
-        um (UserManager): Менеджер пользователей для проверки доступа.
-    """
+async def cmd_listclients(message: Message, service: ClientService, um: UserManager):
+    """Обработчик команды /listclients."""
     if not um.is_user(message.from_user.id):
         await message.answer("Access denied.")
         return
     try:
-        clients = wg.list_clients()
+        clients = await service.list_clients_merged()
         if not clients:
             await message.answer("Нет клиентов.")
             return
         for c in clients:
-            text = f"• {c['name']} — {c['ip']} (pubkey: {c['pubkey'][:8]}...)\n"
+            ip_display = c["ip"]
+            if c.get("ip_v6"):
+                ip_display = f"{c['ip']}, {c['ip_v6']}"
+            local_mark = "" if c.get("has_local_conf") else " ⚠️ no local conf"
+            text = (
+                f"• {c['name']} — {ip_display} "
+                f"(pubkey: {c['pubkey'][:8]}...){local_mark}\n"
+            )
             kb = InlineKeyboardMarkup(
                 inline_keyboard=[
                     [
@@ -427,7 +361,7 @@ async def cmd_listclients(message: Message, wg: WGManager, um: UserManager):
                 ]
             )
             await message.answer(text, reply_markup=kb)
-    except WGManagerError as e:
+    except ClientServiceError as e:
         await message.answer(f"Failed: {e}")
 
 
@@ -576,13 +510,17 @@ async def main():
     bot = Bot(token=bot_cfg.telegram_token)
     dp = Dispatcher()
 
-    dp.message.register(partial(cmd_help, wg=wg, um=um), Command("help"))
-    dp.message.register(partial(cmd_status, wg=wg, um=um), Command("status"))
+    dp.message.register(partial(cmd_help, um=um), Command("help"))
+    dp.message.register(
+        partial(cmd_status, wg_admin=wg_admin, cfg=bot_cfg, um=um), Command("status")
+    )
     dp.message.register(partial(cmd_addclient, service=service, um=um), Command("addclient"))
     dp.message.register(
         partial(cmd_removeclient, service=service, um=um), Command("removeclient")
     )
-    dp.message.register(partial(cmd_listclients, wg=wg, um=um), Command("listclients"))
+    dp.message.register(
+        partial(cmd_listclients, service=service, um=um), Command("listclients")
+    )
     dp.message.register(partial(cmd_syncconfig, wg=wg, um=um), Command("syncconfig"))
 
     dp.message.register(partial(cmd_listusers, um=um), Command("listusers"))
@@ -590,7 +528,7 @@ async def main():
     dp.message.register(partial(cmd_removeuser, um=um), Command("removeuser"))
 
     dp.callback_query.register(
-        partial(cb_stats, wg=wg, um=um), F.data.startswith("stats:")
+        partial(cb_stats, service=service, um=um), F.data.startswith("stats:")
     )
 
     await register_bot_commands(bot)
