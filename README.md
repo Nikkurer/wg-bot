@@ -21,7 +21,7 @@ uv run python main.py -c config.yaml
 # На RU-сервере после wg-install + wg-admin
 sudo mkdir -p /var/lib/wg/clients /var/lib/wg/bot /etc/wg-bot
 sudo cp config.yaml.example /etc/wg-bot/config.yaml
-cp .env.example .env                 # TELEGRAM_TOKEN, WG_ADMIN_GID
+cp env.example .env                 # TELEGRAM_TOKEN, WG_ADMIN_GID
 
 export CONFIG_PATH=/etc/wg-bot/config.yaml
 docker compose up -d --build

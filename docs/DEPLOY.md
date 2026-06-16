@@ -54,7 +54,7 @@ cd /opt/wg-bot   # или клон репозитория
 sudo cp config.yaml.example /etc/wg-bot/config.yaml
 # Отредактируйте ALLOWED_USERS, SERVER_PUBLIC_KEY, SERVER_ENDPOINT (v2)
 
-cp .env.example .env
+cp env.example .env
 # Обязательно:
 #   TELEGRAM_TOKEN=...
 #   WG_ADMIN_GID=$(getent group wg-admin | cut -d: -f3)

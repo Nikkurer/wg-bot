@@ -4,7 +4,7 @@
 #   sudo groupadd -f wg-admin
 #   sudo mkdir -p /var/lib/wg/clients /var/lib/wg/bot /etc/wg-bot
 #   sudo cp config.yaml.example /etc/wg-bot/config.yaml   # отредактировать
-#   sudo cp .env.example .env && edit .env               # TELEGRAM_TOKEN, WG_ADMIN_GID
+#   sudo cp env.example .env && edit .env               # TELEGRAM_TOKEN, WG_ADMIN_GID
 #   sudo chown -R 1000:1000 /var/lib/wg/clients /var/lib/wg/bot
 #
 # Запуск:
