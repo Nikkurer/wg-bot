@@ -9,7 +9,8 @@ CLIENT_DIR: /var/lib/wg/clients
 USERS_FILE: /app/state/users.json
 
 # Client .conf
-SERVER_PUBLIC_KEY: "<wg show wg-ru-clients public-key>"
+# SERVER_PUBLIC_KEY — опционально: при старте берётся из wg-admin GET /interface/status
+# SERVER_PUBLIC_KEY: "<wg show wg-ru-clients public-key>"
 SERVER_ENDPOINT: "vpn.example.com"
 WG_CLIENT_PORT: 443
 WG_MTU: 1420

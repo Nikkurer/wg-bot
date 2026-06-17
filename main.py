@@ -22,6 +22,7 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     Message,
 )
+from bootstrap import enrich_from_wg_admin
 from config import BotConfig, ConfigError, load_config
 from service import ClientService, ClientServiceError
 from users import UserManager
@@ -71,13 +72,20 @@ def setup_logging(verbosity):
     ch_console.setFormatter(formatter)
     root.addHandler(ch_console)
 
-    # Обработчик для файла
+    # Обработчик для файла (не падаем, если volume недоступен для записи)
     log_dir = os.environ.get("WGBOT_LOG_DIR", ".")
     log_path = os.path.join(log_dir, "wg_bot_debug.log")
-    fh = logging.FileHandler(log_path)
-    fh.setLevel(file_level)
-    fh.setFormatter(formatter)
-    root.addHandler(fh)
+    try:
+        os.makedirs(log_dir, exist_ok=True)
+        fh = logging.FileHandler(log_path)
+        fh.setLevel(file_level)
+        fh.setFormatter(formatter)
+        root.addHandler(fh)
+    except OSError as e:
+        print(
+            f"Warning: file logging disabled ({log_path}): {e}",
+            file=sys.stderr,
+        )
 
     # Настраиваем конкретные логгеры
     infoLog.setLevel(logging.DEBUG)
@@ -575,6 +583,12 @@ async def main():
 
     um = UserManager(bot_cfg.users_file, superadmins=bot_cfg.allowed_users)
     wg_admin = WgAdminClient(bot_cfg.wg_admin_socket)
+    try:
+        bot_cfg = await enrich_from_wg_admin(bot_cfg, wg_admin, logger=infoLog)
+    except ConfigError as e:
+        infoLog.error(f"Bootstrap error: {e}")
+        await wg_admin.close()
+        sys.exit(1)
     service = ClientService(bot_cfg, wg_admin)
 
     bot = Bot(token=bot_cfg.telegram_token)

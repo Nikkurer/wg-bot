@@ -28,8 +28,8 @@ services:
       - ${WG_ADMIN_SOCKET_DIR:-/run/wg-admin}:/run/wg-admin:ro
       # Client .conf / .json (private keys)
       - ${CLIENT_DIR:-/var/lib/wg/clients}:/var/lib/wg/clients
-      # users.json, debug log
-      - ${BOT_STATE_DIR:-/var/lib/wg/bot}:/app/state
+      # users.json, debug log (локально: ./state; на сервере: /var/lib/wg/bot, chown 1000:1000)
+      - ${BOT_STATE_DIR:-./state}:/app/state
       # Config without secrets (token via env)
       - ${CONFIG_PATH:-./config.yaml}:/config/config.yaml:ro
     command: ["python", "main.py", "-c", "/config/config.yaml"]

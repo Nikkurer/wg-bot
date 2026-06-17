@@ -35,11 +35,14 @@ env/
 
 # Project specific
 .env
+state/
 wg_bot_debug.log
 users.json
 *.conf
 *.png
 *.json.bak
+wg/
+config.yaml
 
 # Testing
 .pytest_cache/
