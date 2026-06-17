@@ -124,6 +124,37 @@ docker compose up -d --build
 
 ## 7. Troubleshooting
 
+### `Temporary failure resolving 'deb.debian.org'` при `docker compose build`
+
+Сборка образа не может резолвить DNS (часто на VPS с кривой bridge-сетью Docker).
+
+1. В `docker-compose.yml` уже включено `build.network: host` — обновите репо и пересоберите:
+
+```bash
+git pull
+docker compose build --no-cache
+```
+
+2. Проверка DNS с хоста и из контейнера:
+
+```bash
+getent hosts deb.debian.org
+docker run --rm alpine nslookup deb.debian.org
+docker run --rm --network host alpine nslookup deb.debian.org
+```
+
+3. Если с хоста резолвится, а без `--network host` — нет, задайте DNS для Docker (`/etc/docker/daemon.json`):
+
+```json
+{
+  "dns": ["1.1.1.1", "8.8.8.8"]
+}
+```
+
+```bash
+sudo systemctl restart docker
+```
+
 ### `Permission denied` на socket
 
 ```bash

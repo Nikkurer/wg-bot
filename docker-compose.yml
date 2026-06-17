@@ -12,7 +12,10 @@
 
 services:
   wg-bot:
-    build: .
+    build:
+      context: .
+      # DNS хоста: на некоторых VPS bridge-сеть Docker не резолвит deb.debian.org
+      network: host
     image: wg-bot:latest
     container_name: wg-bot
     restart: unless-stopped
