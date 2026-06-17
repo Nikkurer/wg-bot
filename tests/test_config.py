@@ -99,6 +99,12 @@ class TestLoadConfig:
         assert cfg.users_file == "/app/state/users.json"
         assert cfg.wg_admin_socket == "/run/wg-admin/wg-admin.sock"
 
+    def test_config_path_is_directory(self, tmp_path):
+        config_dir = tmp_path / "config.yaml"
+        config_dir.mkdir()
+        with pytest.raises(ConfigError, match="directory"):
+            load_config(str(config_dir), check_client_dir=False)
+
     def test_env_override_socket(self, config_file, monkeypatch):
         path = config_file()
         monkeypatch.setenv("WG_ADMIN_SOCKET", "/tmp/wg.sock")

@@ -56,7 +56,7 @@ sudo cp config.yaml.example /etc/wg-bot/config.yaml
 
 cp env.example .env
 # Обязательно: TELEGRAM_TOKEN, WG_ADMIN_GID
-# На сервере: HOST_BOT_STATE_DIR=/var/lib/wg/bot, CONFIG_PATH=/etc/wg-bot/config.yaml
+# На сервере: HOST_BOT_STATE_DIR=/var/lib/wg/bot, HOST_CONFIG_DIR=/etc/wg-bot
 ```
 
 ### Что где задаётся
@@ -65,7 +65,7 @@ cp env.example .env
 |----------|------|------------|
 | `TELEGRAM_TOKEN` | `.env` | Секрет бота |
 | `WG_ADMIN_GID` | `.env` | Доступ к Unix-сокету wg-admin |
-| `HOST_*`, `CONFIG_PATH` | `.env` | Пути **на хосте** для docker volume mounts |
+| `HOST_*` | `.env` | Пути **на хосте** для docker volume mounts (`HOST_CONFIG_DIR` — каталог с `config.yaml`) |
 | Подсети, `SERVER_ENDPOINT`, RBAC | `config.yaml` | Логика VPN и бота **внутри контейнера** |
 | `CLIENT_DIR`, `USERS_FILE`, `WG_ADMIN_SOCKET` | defaults в коде | Пути внутри контейнера (менять только при кастомных mount) |
 | Имя интерфейса, `SERVER_PUBLIC_KEY` | wg-admin при старте | Автоподстановка из `/interface/status` |
@@ -97,7 +97,7 @@ wg-admin ... -allowed-uids "0,1000"
 ## 5. Запуск
 
 ```bash
-export CONFIG_PATH=/etc/wg-bot/config.yaml
+export HOST_CONFIG_DIR=/etc/wg-bot
 docker compose up -d --build
 docker compose logs -f wg-bot
 ```
@@ -153,6 +153,24 @@ docker run --rm --network host alpine nslookup deb.debian.org
 
 ```bash
 sudo systemctl restart docker
+```
+
+### `Is a directory: '/config/config.yaml'`
+
+Файл `config.yaml` на хосте не существовал при первом `docker compose up` — Docker создал **каталог** вместо файла.
+
+```bash
+docker compose down
+# локально в /opt/wg-bot, если config.yaml — каталог:
+rm -rf config.yaml
+cp config.yaml.example config.yaml
+
+# на сервере:
+sudo rm -rf /etc/wg-bot/config.yaml   # только если это каталог, не файл!
+sudo cp config.yaml.example /etc/wg-bot/config.yaml
+# .env: HOST_CONFIG_DIR=/etc/wg-bot  (каталог, не путь к файлу)
+
+docker compose up -d --build
 ```
 
 ### `Permission denied` на socket

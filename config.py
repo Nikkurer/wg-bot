@@ -100,8 +100,21 @@ def load_config(path: str, *, check_client_dir: bool = True) -> BotConfig:
     if not path or not os.path.exists(path):
         raise ConfigError(f"Config file not found: {path}")
 
-    with open(path, "r", encoding="utf-8") as f:
-        raw = yaml.safe_load(f) or {}
+    if os.path.isdir(path):
+        raise ConfigError(
+            f"Config path is a directory, not a file: {path}. "
+            "Docker создаёт каталог, если файла на хосте не было при первом запуске — "
+            "удалите его, положите config.yaml и используйте mount каталога (HOST_CONFIG_DIR)."
+        )
+
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            raw = yaml.safe_load(f) or {}
+    except IsADirectoryError as e:
+        raise ConfigError(
+            f"Config path is a directory: {path}. "
+            "Проверьте HOST_CONFIG_DIR и наличие config.yaml на хосте."
+        ) from e
 
     if not isinstance(raw, dict):
         raise ConfigError("Config root must be a mapping")

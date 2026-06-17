@@ -31,7 +31,8 @@ services:
       - ${HOST_WG_ADMIN_SOCKET_DIR:-${WG_ADMIN_SOCKET_DIR:-/run/wg-admin}}:/run/wg-admin:ro
       - ${HOST_CLIENT_DIR:-${CLIENT_DIR:-/var/lib/wg/clients}}:/var/lib/wg/clients
       - ${HOST_BOT_STATE_DIR:-${BOT_STATE_DIR:-./state}}:/app/state
-      - ${CONFIG_PATH:-./config.yaml}:/config/config.yaml:ro
+      # Каталог с config.yaml на хосте (не mount файла — иначе Docker создаст пустой каталог)
+      - ${HOST_CONFIG_DIR:-${CONFIG_DIR:-.}}:/config:ro
     command: ["python", "main.py", "-c", "/config/config.yaml"]
     healthcheck:
       test: ["CMD-SHELL", "test -S /run/wg-admin/wg-admin.sock"]

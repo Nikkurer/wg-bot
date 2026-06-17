@@ -23,7 +23,7 @@ uv run python main.py -c config.yaml
 sudo mkdir -p /var/lib/wg/clients /var/lib/wg/bot /etc/wg-bot
 sudo cp config.yaml.example /etc/wg-bot/config.yaml   # логика бота
 cp env.example .env                 # TELEGRAM_TOKEN, WG_ADMIN_GID, HOST_* paths
-# в .env на сервере: HOST_BOT_STATE_DIR=/var/lib/wg/bot, CONFIG_PATH=/etc/wg-bot/config.yaml
+# в .env на сервере: HOST_BOT_STATE_DIR=/var/lib/wg/bot, HOST_CONFIG_DIR=/etc/wg-bot
 
 docker compose up -d --build
 ```
