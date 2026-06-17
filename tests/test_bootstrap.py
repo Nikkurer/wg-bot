@@ -8,7 +8,6 @@ from wg_admin_client import InterfaceStatus, WgAdminClient, WgAdminError
 
 def _cfg(**overrides) -> BotConfig:
     base = dict(
-        wg_interface="wg-ru-clients",
         client_dir="/tmp/clients",
         wg_subnet="10.66.66.0/24",
         telegram_token="token",
@@ -37,6 +36,7 @@ async def test_enrich_server_public_key():
     )
     enriched = await enrich_from_wg_admin(cfg, admin)  # type: ignore[arg-type]
     assert enriched.server_public_key == "server_pubkey_base64"
+    assert enriched.wg_interface == "wg-ru-clients"
 
 
 @pytest.mark.asyncio

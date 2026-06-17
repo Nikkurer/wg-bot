@@ -9,7 +9,7 @@ from typing import List, Optional
 import yaml
 
 # Обязательные ключи в config.yaml (секреты — только через env)
-REQUIRED_KEYS = ("WG_INTERFACE", "WG_SUBNET", "ALLOWED_USERS")
+REQUIRED_KEYS = ("WG_SUBNET", "ALLOWED_USERS")
 
 # Пути по умолчанию внутри контейнера (стандартный docker-compose mount)
 DEFAULT_CLIENT_DIR = "/var/lib/wg/clients"
@@ -31,11 +31,12 @@ class ConfigError(Exception):
 class BotConfig:
     """Конфигурация бота."""
 
-    wg_interface: str
     client_dir: str
     wg_subnet: str
     telegram_token: str
     allowed_users: List[int]
+
+    wg_interface: Optional[str] = None  # из wg-admin при старте
 
     users_file: str = "users.json"
     wg_config_dir: Optional[str] = None
@@ -127,7 +128,6 @@ def load_config(path: str, *, check_client_dir: bool = True) -> BotConfig:
         raise ConfigError(f"CLIENT_DIR not found: {client_dir}")
 
     cfg = BotConfig(
-        wg_interface=str(raw["WG_INTERFACE"]),
         client_dir=client_dir,
         wg_subnet=str(raw["WG_SUBNET"]),
         telegram_token=str(token),

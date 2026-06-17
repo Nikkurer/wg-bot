@@ -15,12 +15,7 @@ async def enrich_from_wg_admin(
     wg_admin: WgAdminClient,
     logger: Optional[logging.Logger] = None,
 ) -> BotConfig:
-    """Подставляет в конфиг значения, доступные из wg-admin API.
-
-    Сейчас:
-    - SERVER_PUBLIC_KEY ← GET /interface/status (public_key интерфейса)
-    - проверка WG_INTERFACE против имени интерфейса в wg-admin
-    """
+    """Подставляет в конфиг значения из wg-admin GET /interface/status."""
     log = logger or logging.getLogger("bootstrap")
 
     try:
@@ -36,15 +31,10 @@ async def enrich_from_wg_admin(
     updates: dict = {}
 
     if status.name:
-        if cfg.wg_interface and cfg.wg_interface != status.name:
-            log.warning(
-                "WG_INTERFACE=%s differs from wg-admin interface %s",
-                cfg.wg_interface,
-                status.name,
-            )
-        elif not cfg.wg_interface:
-            updates["wg_interface"] = status.name
-            log.info("WG_INTERFACE from wg-admin: %s", status.name)
+        updates["wg_interface"] = status.name
+        log.info("Interface from wg-admin: %s", status.name)
+    else:
+        log.warning("wg-admin returned empty interface name")
 
     if not cfg.server_public_key:
         if not status.public_key:

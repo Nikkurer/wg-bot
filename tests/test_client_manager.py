@@ -13,7 +13,6 @@ def bot_config(tmp_path):
     client_dir = tmp_path / "clients"
     client_dir.mkdir()
     return BotConfig(
-        wg_interface="wg-ru-clients",
         client_dir=str(client_dir),
         wg_subnet="10.66.66.0/24",
         telegram_token="token",

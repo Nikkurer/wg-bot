@@ -13,7 +13,6 @@ def config_file(tmp_path):
 
     def _write(**overrides):
         lines = [
-            "WG_INTERFACE: wg-ru-clients",
             f'CLIENT_DIR: "{client_dir}"',
             'WG_SUBNET: "10.66.66.0/24"',
             'TELEGRAM_TOKEN: "test-token-123456789012345678901234"',
@@ -40,7 +39,7 @@ class TestLoadConfig:
     def test_load_minimal(self, config_file):
         path = config_file()
         cfg = load_config(str(path))
-        assert cfg.wg_interface == "wg-ru-clients"
+        assert cfg.wg_interface is None
         assert cfg.wg_subnet == "10.66.66.0/24"
         assert cfg.allowed_users == [111]
         assert cfg.wg_admin_socket == "/run/wg-admin/wg-admin.sock"
@@ -128,7 +127,7 @@ class TestLoadConfig:
     def test_as_dict_backward_compat(self, config_file):
         cfg = load_config(str(config_file()))
         d = cfg.as_dict()
-        assert d["WG_INTERFACE"] == "wg-ru-clients"
+        assert d["WG_INTERFACE"] is None
         assert d["WG_ADMIN_SOCKET"] == "/run/wg-admin/wg-admin.sock"
 
     def test_endpoint_host_fallback(self, config_file):

@@ -281,7 +281,7 @@ async def cmd_status(
     try:
         status = await wg_admin.interface_status()
         text = [
-            f"🔐 Interface: <b>{html.escape(status.name or cfg.wg_interface)}</b>",
+            f"🔐 Interface: <b>{html.escape(status.name or 'unknown')}</b>",
             f"📡 State: {html.escape(status.state or 'unknown')}",
             "",
             "👥 Peers:",
@@ -577,7 +577,7 @@ async def main():
 
     infoLog.info("Config loaded")
     debugLog.debug(
-        f"Config details: WG={bot_cfg.wg_interface} DIR={bot_cfg.client_dir} "
+        f"Config details: WG={bot_cfg.wg_interface or '?'} DIR={bot_cfg.client_dir} "
         f"SUBNET={bot_cfg.wg_subnet} TOKEN={mask_secret(bot_cfg.telegram_token)}"
     )
 

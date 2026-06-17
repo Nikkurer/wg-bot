@@ -66,9 +66,9 @@ cp env.example .env
 | `TELEGRAM_TOKEN` | `.env` | Секрет бота |
 | `WG_ADMIN_GID` | `.env` | Доступ к Unix-сокету wg-admin |
 | `HOST_*`, `CONFIG_PATH` | `.env` | Пути **на хосте** для docker volume mounts |
-| `WG_INTERFACE`, подсети, `SERVER_ENDPOINT`, RBAC | `config.yaml` | Логика VPN и бота **внутри контейнера** |
+| Подсети, `SERVER_ENDPOINT`, RBAC | `config.yaml` | Логика VPN и бота **внутри контейнера** |
 | `CLIENT_DIR`, `USERS_FILE`, `WG_ADMIN_SOCKET` | defaults в коде | Пути внутри контейнера (менять только при кастомных mount) |
-| `SERVER_PUBLIC_KEY` | wg-admin при старте | Автоподстановка из `/interface/status` |
+| Имя интерфейса, `SERVER_PUBLIC_KEY` | wg-admin при старте | Автоподстановка из `/interface/status` |
 
 `TELEGRAM_TOKEN` в `config.yaml` **не нужен** — только в `.env`.
 
