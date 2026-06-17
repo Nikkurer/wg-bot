@@ -66,6 +66,40 @@ class TestLoadConfig:
         cfg = load_config(str(path))
         assert cfg.telegram_token == "env-token"
 
+    def test_token_from_env_without_yaml_key(self, config_file, monkeypatch):
+        path = config_file()
+        text = path.read_text(encoding="utf-8")
+        text = "\n".join(
+            line for line in text.splitlines() if not line.startswith("TELEGRAM_TOKEN:")
+        )
+        path.write_text(text + "\n", encoding="utf-8")
+        monkeypatch.setenv("TELEGRAM_TOKEN", "env-only-token")
+        cfg = load_config(str(path))
+        assert cfg.telegram_token == "env-only-token"
+
+    def test_token_required(self, config_file, monkeypatch):
+        path = config_file()
+        text = path.read_text(encoding="utf-8")
+        text = "\n".join(
+            line for line in text.splitlines() if not line.startswith("TELEGRAM_TOKEN:")
+        )
+        path.write_text(text + "\n", encoding="utf-8")
+        monkeypatch.delenv("TELEGRAM_TOKEN", raising=False)
+        with pytest.raises(ConfigError, match="TELEGRAM_TOKEN"):
+            load_config(str(path))
+
+    def test_default_container_paths(self, config_file, monkeypatch):
+        path = config_file()
+        text = path.read_text(encoding="utf-8")
+        for key in ("CLIENT_DIR:", "USERS_FILE:", "WG_ADMIN_SOCKET:"):
+            text = "\n".join(line for line in text.splitlines() if not line.startswith(key))
+        path.write_text(text + "\n", encoding="utf-8")
+        monkeypatch.setenv("TELEGRAM_TOKEN", "env-token")
+        cfg = load_config(str(path), check_client_dir=False)
+        assert cfg.client_dir == "/var/lib/wg/clients"
+        assert cfg.users_file == "/app/state/users.json"
+        assert cfg.wg_admin_socket == "/run/wg-admin/wg-admin.sock"
+
     def test_env_override_socket(self, config_file, monkeypatch):
         path = config_file()
         monkeypatch.setenv("WG_ADMIN_SOCKET", "/tmp/wg.sock")

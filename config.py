@@ -8,8 +8,13 @@ from typing import List, Optional
 
 import yaml
 
-# v1 — обязательны для текущего бота; v2-ключи опциональны до переключения handlers
-REQUIRED_KEYS = ("WG_INTERFACE", "CLIENT_DIR", "WG_SUBNET", "TELEGRAM_TOKEN", "ALLOWED_USERS")
+# Обязательные ключи в config.yaml (секреты — только через env)
+REQUIRED_KEYS = ("WG_INTERFACE", "WG_SUBNET", "ALLOWED_USERS")
+
+# Пути по умолчанию внутри контейнера (стандартный docker-compose mount)
+DEFAULT_CLIENT_DIR = "/var/lib/wg/clients"
+DEFAULT_USERS_FILE = "/app/state/users.json"
+DEFAULT_WG_ADMIN_SOCKET = "/run/wg-admin/wg-admin.sock"
 
 ENV_OVERRIDES = {
     "TELEGRAM_TOKEN": "TELEGRAM_TOKEN",
@@ -113,7 +118,11 @@ def load_config(path: str, *, check_client_dir: bool = True) -> BotConfig:
     except (TypeError, ValueError) as e:
         raise ConfigError(f"ALLOWED_USERS must contain integers: {e}") from e
 
-    client_dir = str(raw["CLIENT_DIR"])
+    token = os.environ.get("TELEGRAM_TOKEN") or _optional_str(raw.get("TELEGRAM_TOKEN"))
+    if not token or str(token).startswith("REPLACE"):
+        raise ConfigError("Set TELEGRAM_TOKEN in environment (recommended for Docker)")
+
+    client_dir = str(raw.get("CLIENT_DIR", DEFAULT_CLIENT_DIR))
     if check_client_dir and not os.path.isdir(client_dir):
         raise ConfigError(f"CLIENT_DIR not found: {client_dir}")
 
@@ -121,13 +130,13 @@ def load_config(path: str, *, check_client_dir: bool = True) -> BotConfig:
         wg_interface=str(raw["WG_INTERFACE"]),
         client_dir=client_dir,
         wg_subnet=str(raw["WG_SUBNET"]),
-        telegram_token=str(raw["TELEGRAM_TOKEN"]),
+        telegram_token=str(token),
         allowed_users=allowed_users,
-        users_file=str(raw.get("USERS_FILE", "users.json")),
+        users_file=str(raw.get("USERS_FILE", DEFAULT_USERS_FILE)),
         wg_config_dir=_optional_str(raw.get("WG_CONFIG_DIR")),
         server_public_key=_optional_str(raw.get("SERVER_PUBLIC_KEY")),
         server_ip=_optional_str(raw.get("SERVER_IP")),
-        wg_admin_socket=str(raw.get("WG_ADMIN_SOCKET", "/run/wg-admin/wg-admin.sock")),
+        wg_admin_socket=str(raw.get("WG_ADMIN_SOCKET", DEFAULT_WG_ADMIN_SOCKET)),
         wg_subnet_v6=_optional_str(raw.get("WG_SUBNET_V6")),
         server_endpoint=_optional_str(raw.get("SERVER_ENDPOINT")),
         wg_client_port=int(raw.get("WG_CLIENT_PORT", 443)),
@@ -147,12 +156,6 @@ def load_config(path: str, *, check_client_dir: bool = True) -> BotConfig:
             object.__setattr__(cfg, "users_file", env_val)
         elif cfg_field == "WG_ADMIN_SOCKET":
             object.__setattr__(cfg, "wg_admin_socket", env_val)
-
-    if not cfg.telegram_token or cfg.telegram_token.startswith("REPLACE"):
-        if os.environ.get("TELEGRAM_TOKEN"):
-            pass  # already overridden
-        elif cfg.telegram_token.startswith("REPLACE"):
-            raise ConfigError("Set TELEGRAM_TOKEN in config or environment")
 
     return cfg
 

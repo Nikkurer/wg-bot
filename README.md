@@ -10,7 +10,8 @@ Telegram-бот для управления клиентами WireGuard на **
 
 ```bash
 uv venv && uv sync
-cp config.yaml.example config.yaml   # заполнить TELEGRAM_TOKEN, ALLOWED_USERS
+cp config.yaml.example config.yaml   # ALLOWED_USERS, SERVER_ENDPOINT
+export TELEGRAM_TOKEN=...            # или положить в .env
 uv run python main.py -c config.yaml
 ```
 
@@ -20,10 +21,10 @@ uv run python main.py -c config.yaml
 ```bash
 # На RU-сервере после wg-install + wg-admin
 sudo mkdir -p /var/lib/wg/clients /var/lib/wg/bot /etc/wg-bot
-sudo cp config.yaml.example /etc/wg-bot/config.yaml
-cp env.example .env                 # TELEGRAM_TOKEN, WG_ADMIN_GID
+sudo cp config.yaml.example /etc/wg-bot/config.yaml   # логика бота
+cp env.example .env                 # TELEGRAM_TOKEN, WG_ADMIN_GID, HOST_* paths
+# в .env на сервере: HOST_BOT_STATE_DIR=/var/lib/wg/bot, CONFIG_PATH=/etc/wg-bot/config.yaml
 
-export CONFIG_PATH=/etc/wg-bot/config.yaml
 docker compose up -d --build
 ```
 

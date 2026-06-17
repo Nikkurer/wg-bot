@@ -4,7 +4,7 @@
 #   sudo groupadd -f wg-admin
 #   sudo mkdir -p /var/lib/wg/clients /var/lib/wg/bot /etc/wg-bot
 #   sudo cp config.yaml.example /etc/wg-bot/config.yaml   # отредактировать
-#   sudo cp env.example .env && edit .env               # TELEGRAM_TOKEN, WG_ADMIN_GID
+#   sudo cp env.example .env && edit .env               # TELEGRAM_TOKEN, WG_ADMIN_GID, HOST_*
 #   sudo chown -R 1000:1000 /var/lib/wg/clients /var/lib/wg/bot
 #
 # Запуск:
@@ -24,13 +24,10 @@ services:
     group_add:
       - "${WG_ADMIN_GID:?set WG_ADMIN_GID in .env}"
     volumes:
-      # wg-admin Unix socket (read-only)
-      - ${WG_ADMIN_SOCKET_DIR:-/run/wg-admin}:/run/wg-admin:ro
-      # Client .conf / .json (private keys)
-      - ${CLIENT_DIR:-/var/lib/wg/clients}:/var/lib/wg/clients
-      # users.json, debug log (локально: ./state; на сервере: /var/lib/wg/bot, chown 1000:1000)
-      - ${BOT_STATE_DIR:-./state}:/app/state
-      # Config without secrets (token via env)
+      # wg-admin Unix socket (read-only); HOST_* — путь на хосте
+      - ${HOST_WG_ADMIN_SOCKET_DIR:-${WG_ADMIN_SOCKET_DIR:-/run/wg-admin}}:/run/wg-admin:ro
+      - ${HOST_CLIENT_DIR:-${CLIENT_DIR:-/var/lib/wg/clients}}:/var/lib/wg/clients
+      - ${HOST_BOT_STATE_DIR:-${BOT_STATE_DIR:-./state}}:/app/state
       - ${CONFIG_PATH:-./config.yaml}:/config/config.yaml:ro
     command: ["python", "main.py", "-c", "/config/config.yaml"]
     healthcheck:

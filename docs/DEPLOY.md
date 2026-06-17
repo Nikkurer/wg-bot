@@ -52,15 +52,25 @@ sudo chmod 750 /var/lib/wg/clients /var/lib/wg/bot
 cd /opt/wg-bot   # или клон репозитория
 
 sudo cp config.yaml.example /etc/wg-bot/config.yaml
-# Отредактируйте ALLOWED_USERS, SERVER_PUBLIC_KEY, SERVER_ENDPOINT (v2)
+# Отредактируйте ALLOWED_USERS, SERVER_ENDPOINT
 
 cp env.example .env
-# Обязательно:
-#   TELEGRAM_TOKEN=...
-#   WG_ADMIN_GID=$(getent group wg-admin | cut -d: -f3)
+# Обязательно: TELEGRAM_TOKEN, WG_ADMIN_GID
+# На сервере: HOST_BOT_STATE_DIR=/var/lib/wg/bot, CONFIG_PATH=/etc/wg-bot/config.yaml
 ```
 
-`TELEGRAM_TOKEN` можно не класть в `config.yaml` — при наличии переменной окружения она имеет приоритет.
+### Что где задаётся
+
+| Параметр | Файл | Назначение |
+|----------|------|------------|
+| `TELEGRAM_TOKEN` | `.env` | Секрет бота |
+| `WG_ADMIN_GID` | `.env` | Доступ к Unix-сокету wg-admin |
+| `HOST_*`, `CONFIG_PATH` | `.env` | Пути **на хосте** для docker volume mounts |
+| `WG_INTERFACE`, подсети, `SERVER_ENDPOINT`, RBAC | `config.yaml` | Логика VPN и бота **внутри контейнера** |
+| `CLIENT_DIR`, `USERS_FILE`, `WG_ADMIN_SOCKET` | defaults в коде | Пути внутри контейнера (менять только при кастомных mount) |
+| `SERVER_PUBLIC_KEY` | wg-admin при старте | Автоподстановка из `/interface/status` |
+
+`TELEGRAM_TOKEN` в `config.yaml` **не нужен** — только в `.env`.
 
 ---
 
