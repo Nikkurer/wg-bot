@@ -21,12 +21,28 @@ from aiogram.types import (
     BufferedInputFile,
     CallbackQuery,
     FSInputFile,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
     Message,
 )
 from bootstrap import enrich_from_wg_admin
 from config import BotConfig, ConfigError, load_config
+from keyboards import (
+    ADMIN_MENU_BUTTONS,
+    BTN_CLIENTS,
+    BTN_DRIFT,
+    BTN_HELP,
+    BTN_OPERATORS,
+    BTN_STATUS,
+    CB_REMOVE_ASK,
+    CB_REMOVE_CANCEL,
+    CB_REMOVE_CONFIRM,
+    CB_ROTATE_ASK,
+    CB_ROTATE_CANCEL,
+    CB_ROTATE_CONFIRM,
+    client_actions_keyboard,
+    main_menu,
+    remove_confirm_keyboard,
+    rotate_confirm_keyboard,
+)
 from service import ClientService, ClientServiceError
 from users import UserManager
 from wg_admin_client import DriftReport, WgAdminClient, WgAdminError
@@ -210,19 +226,12 @@ VIEWER_COMMANDS = [
     BotCommand(command="help", description="Справка по командам"),
 ]
 
-# Полный набор для admin/superadmin.
+# Полный набор для admin/superadmin (без команд с параметрами — они через кнопки/slash).
 ADMIN_COMMANDS = [
     BotCommand(command="status", description="Показать статус WireGuard"),
-    BotCommand(command="addclient", description="Добавить нового клиента"),
-    BotCommand(command="removeclient", description="Удалить клиента"),
     BotCommand(command="listclients", description="Показать список клиентов"),
     BotCommand(command="drift", description="Проверить drift storage vs WireGuard"),
-    BotCommand(
-        command="rotateclient", description="Ротация ключей клиента (новый conf/QR)"
-    ),
     BotCommand(command="listusers", description="Показать пользователей"),
-    BotCommand(command="adduser", description="Добавить пользователя"),
-    BotCommand(command="removeuser", description="Удалить пользователя"),
     BotCommand(command="help", description="Справка по командам"),
 ]
 
@@ -252,6 +261,68 @@ async def apply_command_menus(bot: Bot, um: UserManager):
 
 
 # --- Handlers ---
+async def cmd_start(message: Message, um: UserManager):
+    """Приветствие и reply-меню по роли."""
+    if not um.is_user(message.from_user.id):
+        await message.answer("Access denied.")
+        return
+    is_admin = um.is_admin(message.from_user.id)
+    await message.answer(
+        "WireGuard management bot.\n"
+        "Используйте кнопки меню или /help.",
+        reply_markup=main_menu(is_admin),
+    )
+
+
+async def handle_menu(
+    message: Message,
+    wg_admin: WgAdminClient,
+    cfg: BotConfig,
+    service: ClientService,
+    um: UserManager,
+):
+    """Маршрутизация нажатий reply-меню к существующим handlers."""
+    if not um.is_user(message.from_user.id):
+        await message.answer("Access denied.")
+        return
+
+    text = message.text
+    if text == BTN_STATUS:
+        await cmd_status(message, wg_admin, cfg, um)
+    elif text == BTN_CLIENTS:
+        await cmd_listclients(message, service, um)
+    elif text == BTN_HELP:
+        await cmd_help(message, um)
+    elif text == BTN_DRIFT:
+        await cmd_drift(message, wg_admin, um)
+    elif text == BTN_OPERATORS:
+        await cmd_listusers(message, um)
+
+
+async def prompt_rotate(message: Message, name: str, service: ClientService):
+    """Запрос подтверждения ротации ключей клиента."""
+    if not service.clients.name_exists(name):
+        await message.answer(f"Client '{name}' not found.")
+        return
+    await message.answer(
+        f"⚠️ Ротация ключей для клиента '{name}'?\n\n"
+        "После подтверждения старый .conf и QR перестанут работать.",
+        reply_markup=rotate_confirm_keyboard(name),
+    )
+
+
+async def prompt_remove(message: Message, name: str, service: ClientService):
+    """Запрос подтверждения удаления клиента."""
+    if not service.clients.name_exists(name):
+        await message.answer(f"Client '{name}' not found.")
+        return
+    await message.answer(
+        f"⚠️ Удалить клиента '{name}'?\n\n"
+        "Peer будет снят с сервера, локальные файлы удалены.",
+        reply_markup=remove_confirm_keyboard(name),
+    )
+
+
 async def cb_stats(callback: CallbackQuery, service: ClientService, um: UserManager):
     """Обработчик callback для просмотра статистики клиента."""
     if not um.is_user(callback.from_user.id):
@@ -290,21 +361,26 @@ async def cmd_help(message: Message, um: UserManager):
         await message.answer("Access denied.")
         return
     lines = [
-        "WireGuard management bot — команды:\n",
-        "/status — показать статус",
-        "/listclients — список клиентов",
+        "WireGuard management bot:\n",
+        "Меню:",
+        f"  {BTN_STATUS} — статус WireGuard",
+        f"  {BTN_CLIENTS} — список клиентов (на карточке — статистика)",
+        f"  {BTN_HELP} — эта справка",
     ]
     if um.is_admin(message.from_user.id):
         lines += [
-            "/addclient <name> — создать клиента",
-            "/removeclient <name> — удалить клиента",
-            "/rotateclient <name> — ротация ключей клиента",
-            "/drift — проверка drift wg-admin vs WireGuard",
-            "/listusers — список операторов",
-            "/adduser <id> <admin|user> — добавить оператора",
-            "/removeuser <id> — удалить оператора",
+            f"  {BTN_DRIFT} — проверка drift wg-admin vs WireGuard",
+            f"  {BTN_OPERATORS} — список операторов",
+            "",
+            "На карточке клиента (admin): 🔄 Ротация, 🗑 Удалить",
+            "",
+            "Slash-команды (fallback):",
+            "  /addclient <name> — создать клиента",
+            "  /removeclient <name> — удалить клиента",
+            "  /rotateclient <name> — ротация ключей",
+            "  /adduser <id> <admin|user> — добавить оператора",
+            "  /removeuser <id> — удалить оператора",
         ]
-    lines.append("/help — это сообщение")
     await message.answer("\n".join(lines))
 
 
@@ -399,18 +475,13 @@ async def cmd_removeclient(
         await message.answer("Access denied.")
         return
     if not command.args:
-        await message.answer("Usage: /removeclient <name>")
+        await message.answer(
+            "Usage: /removeclient <name>\n"
+            f"Или откройте {BTN_CLIENTS} и нажмите 🗑 Удалить на карточке клиента."
+        )
         return
     name = command.args.strip()
-    try:
-        await service.delete_client(name)
-        await message.answer(f"Client '{name}' removed.")
-    except ClientServiceError as e:
-        infoLog.error("ClientServiceError: %s", e)
-        await message.answer("Ошибка при удалении клиента.")
-    except Exception as e:
-        infoLog.error(f"Unexpected error: {traceback.format_exc()}")
-        await message.answer(f"Unexpected error: {e}")
+    await prompt_remove(message, name, service)
 
 
 async def cmd_listclients(message: Message, service: ClientService, um: UserManager):
@@ -423,6 +494,7 @@ async def cmd_listclients(message: Message, service: ClientService, um: UserMana
         if not clients:
             await message.answer("Нет клиентов.")
             return
+        is_admin = um.is_admin(message.from_user.id)
         for c in clients:
             ip_display = c["ip"]
             if c.get("ip_v6"):
@@ -432,15 +504,7 @@ async def cmd_listclients(message: Message, service: ClientService, um: UserMana
                 f"• {c['name']} — {ip_display} "
                 f"(pubkey: {c['pubkey'][:8]}...){local_mark}\n"
             )
-            kb = InlineKeyboardMarkup(
-                inline_keyboard=[
-                    [
-                        InlineKeyboardButton(
-                            text="📊 Статистика", callback_data=f"stats:{c['name']}"
-                        )
-                    ]
-                ]
-            )
+            kb = client_actions_keyboard(c["name"], is_admin=is_admin)
             await message.answer(text, reply_markup=kb)
     except ClientServiceError as e:
         await message.answer(f"Failed: {e}")
@@ -467,27 +531,25 @@ async def cmd_rotateclient(
         await message.answer("Access denied.")
         return
     if not command.args:
-        await message.answer("Usage: /rotateclient <name>")
+        await message.answer(
+            "Usage: /rotateclient <name>\n"
+            f"Или откройте {BTN_CLIENTS} и нажмите 🔄 Ротация на карточке клиента."
+        )
         return
     name = command.args.strip()
-    if not service.clients.name_exists(name):
-        await message.answer(f"Client '{name}' not found.")
+    await prompt_rotate(message, name, service)
+
+
+async def cb_rotate_ask(
+    callback: CallbackQuery, service: ClientService, um: UserManager
+):
+    """Кнопка «Ротация» на карточке клиента — показать confirm."""
+    if not um.is_admin(callback.from_user.id):
+        await callback.answer("Access denied.", show_alert=True)
         return
-    kb = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="✅ Подтвердить", callback_data=f"rotate:confirm:{name}"
-                ),
-                InlineKeyboardButton(text="❌ Отмена", callback_data="rotate:cancel"),
-            ]
-        ]
-    )
-    await message.answer(
-        f"⚠️ Ротация ключей для клиента '{name}'?\n\n"
-        "После подтверждения старый .conf и QR перестанут работать.",
-        reply_markup=kb,
-    )
+    name = callback.data.split(":", 2)[2]
+    await prompt_rotate(callback.message, name, service)
+    await callback.answer()
 
 
 async def cb_rotate(callback: CallbackQuery, service: ClientService, um: UserManager):
@@ -496,12 +558,12 @@ async def cb_rotate(callback: CallbackQuery, service: ClientService, um: UserMan
         await callback.answer("Access denied.", show_alert=True)
         return
 
-    if callback.data == "rotate:cancel":
+    if callback.data == CB_ROTATE_CANCEL:
         await callback.message.edit_text("Ротация отменена.")
         await callback.answer()
         return
 
-    if not callback.data.startswith("rotate:confirm:"):
+    if not callback.data.startswith(f"{CB_ROTATE_CONFIRM}:"):
         await callback.answer()
         return
 
@@ -523,6 +585,40 @@ async def cb_rotate(callback: CallbackQuery, service: ClientService, um: UserMan
     except ClientServiceError as e:
         infoLog.error("Rotate failed for %s: %s", name, e)
         await callback.answer(str(e), show_alert=True)
+
+
+async def cb_remove(callback: CallbackQuery, service: ClientService, um: UserManager):
+    """Запрос, подтверждение или отмена удаления клиента."""
+    if not um.is_admin(callback.from_user.id):
+        await callback.answer("Access denied.", show_alert=True)
+        return
+
+    if callback.data == CB_REMOVE_CANCEL:
+        await callback.message.edit_text("Удаление отменено.")
+        await callback.answer()
+        return
+
+    if callback.data.startswith(f"{CB_REMOVE_ASK}:"):
+        name = callback.data.split(":", 2)[2]
+        await prompt_remove(callback.message, name, service)
+        await callback.answer()
+        return
+
+    if not callback.data.startswith(f"{CB_REMOVE_CONFIRM}:"):
+        await callback.answer()
+        return
+
+    name = callback.data.split(":", 2)[2]
+    try:
+        await service.delete_client(name)
+        await callback.message.edit_text(f"✅ Client '{name}' removed.")
+        await callback.answer()
+    except ClientServiceError as e:
+        infoLog.error("Remove failed for %s: %s", name, e)
+        await callback.answer(str(e), show_alert=True)
+    except Exception as e:
+        infoLog.error("Remove failed for %s: %s", name, traceback.format_exc())
+        await callback.answer(f"Ошибка: {e}", show_alert=True)
 
 
 # --- user management handlers ---
@@ -640,6 +736,7 @@ async def main():
     bot = Bot(token=bot_cfg.telegram_token)
     dp = Dispatcher()
 
+    dp.message.register(partial(cmd_start, um=um), Command("start"))
     dp.message.register(partial(cmd_help, um=um), Command("help"))
     dp.message.register(
         partial(cmd_status, wg_admin=wg_admin, cfg=bot_cfg, um=um), Command("status")
@@ -660,11 +757,29 @@ async def main():
     dp.message.register(partial(cmd_adduser, um=um), Command("adduser"))
     dp.message.register(partial(cmd_removeuser, um=um), Command("removeuser"))
 
+    dp.message.register(
+        partial(
+            handle_menu,
+            wg_admin=wg_admin,
+            cfg=bot_cfg,
+            service=service,
+            um=um,
+        ),
+        F.text.in_(ADMIN_MENU_BUTTONS),
+    )
+
     dp.callback_query.register(
         partial(cb_stats, service=service, um=um), F.data.startswith("stats:")
     )
     dp.callback_query.register(
+        partial(cb_rotate_ask, service=service, um=um),
+        F.data.startswith(f"{CB_ROTATE_ASK}:"),
+    )
+    dp.callback_query.register(
         partial(cb_rotate, service=service, um=um), F.data.startswith("rotate:")
+    )
+    dp.callback_query.register(
+        partial(cb_remove, service=service, um=um), F.data.startswith("remove:")
     )
 
     await apply_command_menus(bot, um)
