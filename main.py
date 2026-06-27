@@ -36,6 +36,10 @@ infoLog = logging.getLogger("wg_bot_info")
 debugLog = logging.getLogger("wg_bot_debug")
 
 
+def _debug_from_env() -> bool:
+    return os.environ.get("DEBUG", "").strip().lower() in ("1", "true", "yes", "on")
+
+
 def setup_logging(verbosity):
     """Настраивает систему логирования для бота.
 
@@ -48,6 +52,7 @@ def setup_logging(verbosity):
             0 - INFO и выше (по умолчанию)
             1 - INFO и выше (то же самое)
             2+ - DEBUG и выше
+            Также DEBUG=1 в окружении даёт уровень 2+.
     """
     # Определяем уровни логирования
     # По умолчанию (verbosity=0) выводим INFO, чтобы видеть основные события
@@ -607,7 +612,8 @@ async def main():
     parser.add_argument("-v", action="count", default=0)
     args = parser.parse_args()
 
-    setup_logging(args.v)
+    verbosity = max(args.v, 2 if _debug_from_env() else 0)
+    setup_logging(verbosity)
 
     try:
         bot_cfg = load_config(args.config)
