@@ -11,7 +11,7 @@ import subprocess
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import List, Optional, Set, Tuple
+from typing import List, Optional, Tuple
 
 from config import BotConfig
 
@@ -97,48 +97,33 @@ class ClientManager:
         self.logger.debug("Generated keypair for new client")
         return priv, pub
 
-    def list_used_ipv4_hosts(self) -> Set[str]:
-        used: Set[str] = set()
-        if not os.path.isdir(self.client_dir):
-            return used
-        for fn in os.listdir(self.client_dir):
-            if not fn.endswith(".json"):
-                continue
+    def parse_peer_ips(self, allowed_ips: List[str]) -> Tuple[str, Optional[str]]:
+        """Разбирает allowed_ips peer-а из wg-admin на IPv4 и IPv6 для client conf."""
+        client_ip: Optional[str] = None
+        client_ip_v6: Optional[str] = None
+        for cidr in allowed_ips:
             try:
-                with open(os.path.join(self.client_dir, fn), "r", encoding="utf-8") as f:
-                    meta = json.load(f)
-                ip = meta.get("client_ip")
-                if ip:
-                    used.add(str(ip).split("/")[0])
-            except (OSError, json.JSONDecodeError):
+                iface = ipaddress.ip_interface(cidr)
+            except ValueError:
                 continue
-        return used
+            if iface.version == 4 and client_ip is None:
+                client_ip = cidr
+            elif iface.version == 6 and client_ip_v6 is None:
+                client_ip_v6 = cidr
+        if not client_ip:
+            raise ClientManagerError("Peer has no IPv4 in allowed_ips")
+        return client_ip, client_ip_v6
 
-    def allocate_ips(self, extra_used: Optional[Set[str]] = None) -> Tuple[str, Optional[str]]:
-        """Выделяет пару IPv4 + IPv6 (если настроено) с общим host-id."""
-        used = self.list_used_ipv4_hosts()
-        if extra_used:
-            used |= {h.split("/")[0] for h in extra_used}
-
-        for ip in self.wg_subnet.hosts():
-            host = str(ip)
-            if host in used:
-                continue
-            ipv4 = f"{host}/{self.wg_subnet.prefixlen}"
-            ipv6 = None
-            if self.wg_subnet_v6:
-                # fd66:66::N/128 где N = последний октет IPv4
-                last = int(host.split(".")[-1])
-                v6 = ipaddress.ip_address(
-                    int(self.wg_subnet_v6.network_address) + last
-                )
-                if v6 not in self.wg_subnet_v6:
-                    continue
-                ipv6 = f"{v6}/{128}"
-            self.logger.debug("Allocated IPs: v4=%s v6=%s", ipv4, ipv6)
-            return ipv4, ipv6
-
-        raise ClientManagerError("No free IPs available in subnet")
+    def derive_ipv6_from_ipv4(self, client_ip: str) -> Optional[str]:
+        """Строит IPv6 клиента по последнему октету IPv4 (fd66:66::N/128)."""
+        if not self.wg_subnet_v6:
+            return None
+        host = client_ip.split("/")[0]
+        last = int(host.split(".")[-1])
+        v6 = ipaddress.ip_address(int(self.wg_subnet_v6.network_address) + last)
+        if v6 not in self.wg_subnet_v6:
+            raise ClientManagerError(f"IPv6 {v6} is outside configured subnet")
+        return f"{v6}/128"
 
     def build_client_conf(
         self,

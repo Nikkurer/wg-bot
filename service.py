@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import List, Optional, Set
+from typing import List, Optional
 
 from client_manager import ClientManager, ClientManagerError, ClientRecord
 from config import BotConfig
@@ -41,18 +41,11 @@ class ClientService:
         if self.clients.name_exists(name):
             raise ClientServiceError("Client with that name already exists")
 
-        extra_used = await self._used_ips_from_wg_admin()
         priv, pub = self.clients.generate_keypair()
-        client_ip, client_ip_v6 = self.clients.allocate_ips(extra_used=extra_used)
-
-        allowed_ips = [client_ip.split("/")[0] + "/32"]
-        if client_ip_v6:
-            allowed_ips.append(client_ip_v6)
 
         try:
             await self.wg_admin.add_peer(
                 public_key=pub,
-                allowed_ips=allowed_ips,
                 description=name,
                 persistent_keepalive=self.cfg.persistent_keepalive,
             )
@@ -60,6 +53,16 @@ class ClientService:
             raise ClientServiceError(f"Failed to add peer on server: {e}") from e
 
         try:
+            peer = await self._get_peer_by_pubkey(pub)
+            client_ip, client_ip_v6 = self.clients.parse_peer_ips(peer.allowed_ips)
+
+            if self.cfg.wg_subnet_v6 and not client_ip_v6:
+                client_ip_v6 = self.clients.derive_ipv6_from_ipv4(client_ip)
+                await self.wg_admin.update_peer(
+                    public_key=pub,
+                    allowed_ips=[client_ip, client_ip_v6],
+                )
+
             conf_text = self.clients.build_client_conf(priv, client_ip, client_ip_v6)
             record = self.clients.save_client(
                 name, pub, client_ip, conf_text, client_ip_v6=client_ip_v6
@@ -70,6 +73,8 @@ class ClientService:
                 await self.wg_admin.remove_peer(pub)
             except WgAdminError as rollback_err:
                 self.logger.error("Rollback remove_peer failed: %s", rollback_err)
+            if isinstance(e, (WgAdminError, ClientManagerError)):
+                raise ClientServiceError(str(e)) from e
             raise ClientServiceError(f"Failed to save client files: {e}") from e
 
         self.logger.info("Created client %s with IP %s", name, client_ip)
@@ -142,16 +147,12 @@ class ClientService:
 
         return result
 
-    async def _used_ips_from_wg_admin(self) -> Set[str]:
-        used: Set[str] = set()
-        try:
-            peers = await self.wg_admin.list_peers()
-        except WgAdminError:
-            return used
+    async def _get_peer_by_pubkey(self, public_key: str) -> PeerInfo:
+        peers = await self.wg_admin.list_peers()
         for peer in peers:
-            for cidr in peer.allowed_ips:
-                used.add(cidr.split("/")[0])
-        return used
+            if peer.public_key == public_key:
+                return peer
+        raise ClientServiceError("Peer not found after add")
 
 
 def _merge_client(name: str, local: Optional[ClientRecord], peer: Optional[PeerInfo]) -> dict:

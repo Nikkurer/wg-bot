@@ -45,6 +45,13 @@ def service(bot_config, wg_admin, client_manager):
 class TestClientService:
     @pytest.mark.asyncio
     async def test_create_client(self, service, wg_admin):
+        wg_admin.list_peers.return_value = [
+            PeerInfo(
+                public_key="pub",
+                allowed_ips=["10.66.66.2/32"],
+                description="alice",
+            )
+        ]
         with patch.object(
             service.clients, "generate_keypair", return_value=("priv", "pub")
         ):
@@ -54,12 +61,19 @@ class TestClientService:
         call = wg_admin.add_peer.await_args
         assert call.kwargs["public_key"] == "pub"
         assert call.kwargs["description"] == "alice"
+        assert "allowed_ips" not in call.kwargs
+        wg_admin.update_peer.assert_awaited_once()
         assert result.record.name == "alice"
+        assert result.record.client_ip == "10.66.66.2/32"
+        assert result.record.client_ip_v6 == "fd66:66::2/128"
         assert "PrivateKey = priv" in result.conf_text
         assert service.clients.name_exists("alice")
 
     @pytest.mark.asyncio
     async def test_create_rollback_on_save_failure(self, service, wg_admin):
+        wg_admin.list_peers.return_value = [
+            PeerInfo(public_key="pub", allowed_ips=["10.66.66.2/32"], description="bob")
+        ]
         with patch.object(
             service.clients, "generate_keypair", return_value=("priv", "pub")
         ), patch.object(
@@ -71,6 +85,9 @@ class TestClientService:
 
     @pytest.mark.asyncio
     async def test_delete_client(self, service, wg_admin):
+        wg_admin.list_peers.return_value = [
+            PeerInfo(public_key="pub", allowed_ips=["10.66.66.2/32"], description="carol")
+        ]
         with patch.object(
             service.clients, "generate_keypair", return_value=("priv", "pub")
         ):
@@ -81,6 +98,9 @@ class TestClientService:
 
     @pytest.mark.asyncio
     async def test_rotate_client(self, service, wg_admin):
+        wg_admin.list_peers.return_value = [
+            PeerInfo(public_key="pub1", allowed_ips=["10.66.66.2/32"], description="dave")
+        ]
         with patch.object(
             service.clients, "generate_keypair", side_effect=[("priv1", "pub1"), ("priv2", "pub2")]
         ):
@@ -96,18 +116,21 @@ class TestClientService:
 
     @pytest.mark.asyncio
     async def test_list_clients_merged(self, service, wg_admin):
+        wg_admin.list_peers.side_effect = [
+            [PeerInfo(public_key="pub", allowed_ips=["10.66.66.10/32"], description="eve")],
+            [
+                PeerInfo(
+                    public_key="pub",
+                    allowed_ips=["10.66.66.10/32"],
+                    description="eve",
+                    transfer_rx=100,
+                )
+            ],
+        ]
         with patch.object(
             service.clients, "generate_keypair", return_value=("priv", "pub")
         ):
             await service.create_client("eve")
-        wg_admin.list_peers.return_value = [
-            PeerInfo(
-                public_key="pub",
-                allowed_ips=["10.66.66.10/32"],
-                description="eve",
-                transfer_rx=100,
-            )
-        ]
         items = await service.list_clients_merged()
         assert len(items) == 1
         assert items[0]["name"] == "eve"

@@ -3,6 +3,7 @@ import httpx
 import pytest
 
 from wg_admin_client import (
+    AllocatedIPsReport,
     DriftReport,
     InterfaceStatus,
     PeerInfo,
@@ -63,6 +64,61 @@ class TestWgAdminClient:
         )
         assert seen["json"]["public_key"] == "pubkey123"
         assert seen["json"]["description"] == "alice"
+
+    @pytest.mark.asyncio
+    async def test_add_peer_auto_allocate(self, client):
+        seen = {}
+
+        def add_handler(request):
+            import json
+
+            seen["json"] = json.loads(request.content)
+            return _ok()
+
+        client._routes[("POST", "/peer/add")] = add_handler
+        await client.add_peer("pubkey123", description="alice", persistent_keepalive=25)
+        assert seen["json"]["public_key"] == "pubkey123"
+        assert "allowed_ips" not in seen["json"]
+
+    @pytest.mark.asyncio
+    async def test_update_peer(self, client):
+        seen = {}
+
+        def handler(request):
+            import json
+
+            seen["json"] = json.loads(request.content)
+            return _ok()
+
+        client._routes[("POST", "/peer/update")] = handler
+        await client.update_peer(
+            "pubkey123",
+            allowed_ips=["10.66.66.2/32", "fd66:66::2/128"],
+        )
+        assert seen["json"]["public_key"] == "pubkey123"
+        assert seen["json"]["allowed_ips"] == ["10.66.66.2/32", "fd66:66::2/128"]
+
+    @pytest.mark.asyncio
+    async def test_list_allocated_ips(self, client):
+        client._routes[("GET", "/ip/allocated")] = lambda r: _ok(
+            {
+                "pool": "10.66.66.0/24",
+                "server": ["10.66.66.1/24"],
+                "peers": [
+                    {
+                        "public_key": "pk1",
+                        "description": "alice",
+                        "allowed_ips": ["10.66.66.2/32"],
+                    }
+                ],
+            }
+        )
+        report = await client.list_allocated_ips()
+        assert isinstance(report, AllocatedIPsReport)
+        assert report.pool == "10.66.66.0/24"
+        assert report.server == ["10.66.66.1/24"]
+        assert len(report.peers) == 1
+        assert report.peers[0].allowed_ips == ["10.66.66.2/32"]
 
     @pytest.mark.asyncio
     async def test_remove_peer(self, client):

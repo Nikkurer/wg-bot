@@ -12,9 +12,12 @@ from typing import Optional
 
 import qrcode
 from aiogram import Bot, Dispatcher, F
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandObject
 from aiogram.types import (
     BotCommand,
+    BotCommandScopeChat,
+    BotCommandScopeDefault,
     BufferedInputFile,
     CallbackQuery,
     FSInputFile,
@@ -195,30 +198,52 @@ async def send_client_conf_and_qr(
     await message.answer_photo(photo=photo_file, caption=f"QR для клиента '{name}'")
 
 
-async def register_bot_commands(bot: Bot):
-    """Регистрирует команды бота в Telegram.
+# Команды для обычных пользователей (роль user) и всех незарегистрированных.
+VIEWER_COMMANDS = [
+    BotCommand(command="status", description="Показать статус WireGuard"),
+    BotCommand(command="listclients", description="Показать список клиентов"),
+    BotCommand(command="help", description="Справка по командам"),
+]
 
-    Устанавливает список команд, которые будут отображаться в меню
-    команд бота при вводе "/".
+# Полный набор для admin/superadmin.
+ADMIN_COMMANDS = [
+    BotCommand(command="status", description="Показать статус WireGuard"),
+    BotCommand(command="addclient", description="Добавить нового клиента"),
+    BotCommand(command="removeclient", description="Удалить клиента"),
+    BotCommand(command="listclients", description="Показать список клиентов"),
+    BotCommand(command="drift", description="Проверить drift storage vs WireGuard"),
+    BotCommand(
+        command="rotateclient", description="Ротация ключей клиента (новый conf/QR)"
+    ),
+    BotCommand(command="listusers", description="Показать пользователей"),
+    BotCommand(command="adduser", description="Добавить пользователя"),
+    BotCommand(command="removeuser", description="Удалить пользователя"),
+    BotCommand(command="help", description="Справка по командам"),
+]
+
+
+async def apply_command_menus(bot: Bot, um: UserManager):
+    """Устанавливает меню команд по ролям через Telegram command scopes.
+
+    Глобальный дефолт — минимальный набор (VIEWER_COMMANDS). Для каждого
+    известного оператора задаётся персональный scope в его личном чате:
+    admin/superadmin видят полный список, user — набор для просмотра.
 
     Args:
         bot (Bot): Экземпляр Telegram бота.
+        um (UserManager): Менеджер пользователей для определения ролей.
     """
-    commands = [
-        BotCommand(command="status", description="Показать статус WireGuard"),
-        BotCommand(command="addclient", description="Добавить нового клиента"),
-        BotCommand(command="removeclient", description="Удалить клиента"),
-        BotCommand(command="listclients", description="Показать список клиентов"),
-        BotCommand(command="drift", description="Проверить drift storage vs WireGuard"),
-        BotCommand(
-            command="rotateclient", description="Ротация ключей клиента (новый conf/QR)"
-        ),
-        BotCommand(command="help", description="Справка по командам"),
-        BotCommand(command="listusers", description="Показать пользователей"),
-        BotCommand(command="adduser", description="Добавить пользователя"),
-        BotCommand(command="removeuser", description="Удалить пользователя"),
-    ]
-    await bot.set_my_commands(commands)
+    await bot.set_my_commands(VIEWER_COMMANDS, scope=BotCommandScopeDefault())
+    for u in um.list_users():
+        cmds = ADMIN_COMMANDS if u["role"] in ("admin", "superadmin") else VIEWER_COMMANDS
+        try:
+            await bot.set_my_commands(
+                cmds, scope=BotCommandScopeChat(chat_id=u["id"])
+            )
+        except TelegramBadRequest:
+            # Чат с ботом ещё не открыт — персональный scope применится
+            # при следующем рестарте/adduser после того, как юзер нажмёт /start.
+            debugLog.debug("Skip command scope for chat %s (not started)", u["id"])
 
 
 # --- Handlers ---
@@ -259,16 +284,23 @@ async def cmd_help(message: Message, um: UserManager):
     if not um.is_user(message.from_user.id):
         await message.answer("Access denied.")
         return
-    await message.answer(
-        "WireGuard management bot — команды:\n\n"
-        "/status — показать статус\n"
-        "/addclient <name> — создать клиента\n"
-        "/removeclient <name> — удалить клиента\n"
-        "/listclients — список клиентов\n"
-        "/drift — проверка drift wg-admin vs WireGuard\n"
-        "/rotateclient <name> — ротация ключей клиента\n"
-        "/help — это сообщение\n"
-    )
+    lines = [
+        "WireGuard management bot — команды:\n",
+        "/status — показать статус",
+        "/listclients — список клиентов",
+    ]
+    if um.is_admin(message.from_user.id):
+        lines += [
+            "/addclient <name> — создать клиента",
+            "/removeclient <name> — удалить клиента",
+            "/rotateclient <name> — ротация ключей клиента",
+            "/drift — проверка drift wg-admin vs WireGuard",
+            "/listusers — список операторов",
+            "/adduser <id> <admin|user> — добавить оператора",
+            "/removeuser <id> — удалить оператора",
+        ]
+    lines.append("/help — это сообщение")
+    await message.answer("\n".join(lines))
 
 
 async def cmd_status(
@@ -527,6 +559,7 @@ async def cmd_adduser(message: Message, command: CommandObject, um: UserManager)
     try:
         user_id_str, role = command.args.split(maxsplit=1)
         um.add_user(int(user_id_str), role)
+        await apply_command_menus(message.bot, um)
         await message.answer(f"✅ Пользователь {user_id_str} добавлен с ролью {role}.")
     except Exception as e:
         await message.answer(f"❌ Ошибка: {e}")
@@ -549,8 +582,15 @@ async def cmd_removeuser(message: Message, command: CommandObject, um: UserManag
         await message.answer("Usage: /removeuser <id>")
         return
     try:
-        um.remove_user(int(command.args.strip()))
-        await message.answer(f"✅ Пользователь {command.args.strip()} удалён.")
+        removed_id = int(command.args.strip())
+        um.remove_user(removed_id)
+        try:
+            await message.bot.delete_my_commands(
+                scope=BotCommandScopeChat(chat_id=removed_id)
+            )
+        except TelegramBadRequest:
+            pass
+        await message.answer(f"✅ Пользователь {removed_id} удалён.")
     except Exception as e:
         await message.answer(f"❌ Ошибка: {e}")
 
@@ -621,7 +661,7 @@ async def main():
         partial(cb_rotate, service=service, um=um), F.data.startswith("rotate:")
     )
 
-    await register_bot_commands(bot)
+    await apply_command_menus(bot, um)
     infoLog.info("Bot starting...")
     try:
         await dp.start_polling(bot)

@@ -57,6 +57,20 @@ class DriftReport:
     mismatch: List[DriftMismatch] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class PeerAllocation:
+    public_key: str
+    allowed_ips: List[str]
+    description: str = ""
+
+
+@dataclass(frozen=True)
+class AllocatedIPsReport:
+    pool: str
+    server: List[str]
+    peers: List[PeerAllocation]
+
+
 class WgAdminClient:
     """Async-клиент wg-admin over Unix socket."""
 
@@ -83,18 +97,40 @@ class WgAdminClient:
     async def add_peer(
         self,
         public_key: str,
-        allowed_ips: List[str],
+        allowed_ips: Optional[List[str]] = None,
         description: str = "",
         persistent_keepalive: Optional[int] = 25,
     ) -> None:
+        """Добавить peer. Без allowed_ips wg-admin выделит IP из пула автоматически."""
         body: Dict[str, Any] = {
             "public_key": public_key,
-            "allowed_ips": allowed_ips,
             "description": description,
         }
+        if allowed_ips is not None:
+            body["allowed_ips"] = allowed_ips
         if persistent_keepalive is not None:
             body["persistent_keepalive"] = persistent_keepalive
         await self._request("POST", "/peer/add", json=body)
+
+    async def update_peer(
+        self,
+        public_key: str,
+        *,
+        allowed_ips: Optional[List[str]] = None,
+        description: Optional[str] = None,
+        endpoint: Optional[str] = None,
+        persistent_keepalive: Optional[int] = None,
+    ) -> None:
+        body: Dict[str, Any] = {"public_key": public_key}
+        if allowed_ips is not None:
+            body["allowed_ips"] = allowed_ips
+        if description is not None:
+            body["description"] = description
+        if endpoint is not None:
+            body["endpoint"] = endpoint
+        if persistent_keepalive is not None:
+            body["persistent_keepalive"] = persistent_keepalive
+        await self._request("POST", "/peer/update", json=body)
 
     async def remove_peer(self, public_key: str) -> None:
         await self._request("POST", "/peer/remove", json={"public_key": public_key})
@@ -122,6 +158,14 @@ class WgAdminClient:
             public_key=data.get("public_key", ""),
             state=data.get("state", ""),
             peers=peers,
+        )
+
+    async def list_allocated_ips(self) -> AllocatedIPsReport:
+        data = await self._request("GET", "/ip/allocated")
+        return AllocatedIPsReport(
+            pool=data.get("pool", ""),
+            server=list(data.get("server") or []),
+            peers=[_parse_peer_allocation(p) for p in data.get("peers") or []],
         )
 
     async def detect_drift(self) -> DriftReport:
@@ -195,6 +239,14 @@ def _parse_drift_peer(raw: Dict[str, Any]) -> DriftPeer:
     return DriftPeer(
         public_key=raw.get("public_key", ""),
         allowed_ips=list(raw.get("allowed_ips") or []),
+    )
+
+
+def _parse_peer_allocation(raw: Dict[str, Any]) -> PeerAllocation:
+    return PeerAllocation(
+        public_key=raw.get("public_key", ""),
+        allowed_ips=list(raw.get("allowed_ips") or []),
+        description=raw.get("description") or "",
     )
 
 

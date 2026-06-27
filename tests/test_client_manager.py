@@ -46,22 +46,19 @@ class TestClientManager:
             assert pub == "pubkey"
             assert mock_run.call_args_list[0][0][0] == ["wg", "genkey"]
 
-    def test_allocate_ips_empty(self, manager):
-        v4, v6 = manager.allocate_ips()
-        assert v4.startswith("10.66.66.")
-        assert v6 and v6.startswith("fd66:66::")
+    def test_parse_peer_ips(self, manager):
+        v4, v6 = manager.parse_peer_ips(["10.66.66.2/32", "fd66:66::2/128"])
+        assert v4 == "10.66.66.2/32"
+        assert v6 == "fd66:66::2/128"
 
-    def test_allocate_skips_used(self, manager, bot_config):
-        meta = {
-            "name": "used",
-            "client_ip": "10.66.66.2/24",
-            "pubkey": "pk",
-            "conf_path": str(bot_config.client_dir) + "/used.conf",
-        }
-        with open(bot_config.client_dir + "/used.json", "w") as f:
-            json.dump(meta, f)
-        v4, _ = manager.allocate_ips()
-        assert v4.startswith("10.66.66.") and not v4.startswith("10.66.66.2/")
+    def test_parse_peer_ips_ipv4_only(self, manager):
+        v4, v6 = manager.parse_peer_ips(["10.66.66.2/32"])
+        assert v4 == "10.66.66.2/32"
+        assert v6 is None
+
+    def test_derive_ipv6_from_ipv4(self, manager):
+        v6 = manager.derive_ipv6_from_ipv4("10.66.66.10/32")
+        assert v6 == "fd66:66::a/128"
 
     def test_build_client_conf(self, manager):
         conf = manager.build_client_conf(
