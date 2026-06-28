@@ -267,13 +267,30 @@ class ClientManager:
                 continue
         return clients
 
+    def _client_dir_real(self) -> str:
+        return os.path.realpath(self.client_dir)
+
+    def _assert_path_inside_client_dir(self, path: str) -> str:
+        """Ensure resolved path stays under CLIENT_DIR (defense in depth)."""
+        resolved = os.path.realpath(path)
+        base = self._client_dir_real()
+        if resolved != base and not resolved.startswith(base + os.sep):
+            raise ClientManagerError("Path outside CLIENT_DIR")
+        return path
+
+    def _safe_client_path(self, name: str, suffix: str) -> str:
+        self.validate_name(name)
+        path = os.path.join(self.client_dir, f"{name}{suffix}")
+        return self._assert_path_inside_client_dir(path)
+
     def _meta_path(self, name: str) -> str:
-        return os.path.join(self.client_dir, f"{name}.json")
+        return self._safe_client_path(name, ".json")
 
     def _conf_path(self, name: str) -> str:
-        return os.path.join(self.client_dir, f"{name}.conf")
+        return self._safe_client_path(name, ".conf")
 
     def _atomic_write(self, path: str, data: str, mode: int = 0o600) -> None:
+        self._assert_path_inside_client_dir(path)
         if os.path.exists(path) and os.path.islink(path):
             raise ClientManagerError("Refusing to overwrite symlink")
         dir_name = os.path.dirname(path) or "."

@@ -118,6 +118,15 @@ class TestClientManager:
         names = [c.name for c in manager.list_local_clients()]
         assert names == ["good"]
 
+    def test_safe_client_path_rejects_traversal(self, manager):
+        with pytest.raises(ClientManagerError, match="Invalid"):
+            manager._safe_client_path("../state/users", ".json")
+
+    def test_atomic_write_rejects_path_outside_client_dir(self, manager, tmp_path):
+        outside = tmp_path / "outside.conf"
+        with pytest.raises(ClientManagerError, match="outside CLIENT_DIR"):
+            manager._atomic_write(str(outside), "data")
+
     def test_update_client_after_rotate(self, manager):
         manager.save_client("carol", "oldpk", "10.66.66.12/32", "old conf")
         updated = manager.update_client_after_rotate("carol", "newpk", "new conf")
