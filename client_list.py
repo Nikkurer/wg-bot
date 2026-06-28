@@ -1,14 +1,17 @@
-"""Helpers for sorted client lists, pagination and index-based callbacks."""
+"""Helpers for sorted client lists, pagination and pubkey-based callbacks."""
 
 from __future__ import annotations
 
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 CLIENTS_PAGE_SIZE = 8
 
+# WireGuard public keys are 44-char base64; fits Telegram callback_data with prefix.
+WG_PUBKEY_LEN = 44
+
 
 def sort_clients(clients: List[dict]) -> List[dict]:
-    return sorted(clients, key=lambda c: c["name"])
+    return sorted(clients, key=lambda c: c.get("display_name", c["name"]))
 
 
 def paginate_clients(
@@ -22,13 +25,18 @@ def paginate_clients(
     return clients[start : start + page_size], page, total_pages
 
 
-def global_client_index(page: int, page_index: int, *, page_size: int = CLIENTS_PAGE_SIZE) -> int:
-    return page * page_size + page_index
+def client_by_pubkey(clients: List[dict], pubkey: str) -> Optional[dict]:
+    for c in clients:
+        if c.get("pubkey") == pubkey:
+            return c
+    return None
 
 
-def client_index_in_sorted(clients: List[dict], name: str) -> int | None:
-    sorted_list = sort_clients(clients)
-    for i, c in enumerate(sorted_list):
-        if c["name"] == name:
-            return i
+def client_by_name(clients: List[dict], name: str) -> Optional[dict]:
+    for c in clients:
+        if c.get("display_name", c["name"]) == name:
+            return c
+        storage = c.get("storage_name")
+        if storage and storage == name:
+            return c
     return None

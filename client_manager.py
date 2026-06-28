@@ -30,6 +30,7 @@ class ClientRecord:
     conf_path: str
     client_ip_v6: Optional[str] = None
     created_at: Optional[str] = None
+    owner: Optional[int] = None
 
 
 class ClientManager:
@@ -70,6 +71,7 @@ class ClientManager:
             raise ClientManagerError("Invalid client name")
 
     def name_exists(self, name: str) -> bool:
+        self.validate_name(name)
         return os.path.exists(self._meta_path(name)) or os.path.exists(
             self._conf_path(name)
         )
@@ -159,7 +161,14 @@ class ClientManager:
         return "\n".join(lines)
 
     def save_client(
-        self, name: str, pubkey: str, client_ip: str, conf_text: str, client_ip_v6: Optional[str] = None
+        self,
+        name: str,
+        pubkey: str,
+        client_ip: str,
+        conf_text: str,
+        client_ip_v6: Optional[str] = None,
+        *,
+        owner: int,
     ) -> ClientRecord:
         self.validate_name(name)
         if self.name_exists(name):
@@ -175,6 +184,7 @@ class ClientManager:
             "pubkey": pubkey,
             "conf_path": conf_path,
             "created_at": created_at,
+            "owner": owner,
         }
         if client_ip_v6:
             meta["client_ip_v6"] = client_ip_v6
@@ -189,21 +199,31 @@ class ClientManager:
             conf_path=conf_path,
             client_ip_v6=client_ip_v6,
             created_at=created_at,
+            owner=owner,
         )
 
     def load_client(self, name: str) -> ClientRecord:
+        self.validate_name(name)
         meta_path = self._meta_path(name)
         if not os.path.exists(meta_path):
             raise ClientManagerError("Client not found")
         with open(meta_path, "r", encoding="utf-8") as f:
             meta = json.load(f)
+        meta_name = meta.get("name", name)
+        if meta_name != name:
+            self.validate_name(meta_name)
+        conf_path = self._conf_path(name)
+        owner = meta.get("owner")
+        if owner is not None:
+            owner = int(owner)
         return ClientRecord(
-            name=meta.get("name", name),
+            name=name,
             pubkey=meta.get("pubkey", ""),
             client_ip=meta.get("client_ip", ""),
-            conf_path=meta.get("conf_path", self._conf_path(name)),
+            conf_path=conf_path,
             client_ip_v6=meta.get("client_ip_v6"),
             created_at=meta.get("created_at"),
+            owner=owner,
         )
 
     def read_conf(self, name: str) -> str:
@@ -214,8 +234,10 @@ class ClientManager:
     def update_client_after_rotate(
         self, name: str, new_pubkey: str, conf_text: str
     ) -> ClientRecord:
+        self.validate_name(name)
         record = self.load_client(name)
-        self._atomic_write(record.conf_path, conf_text)
+        conf_path = self._conf_path(name)
+        self._atomic_write(conf_path, conf_text)
         meta_path = self._meta_path(name)
         with open(meta_path, "r", encoding="utf-8") as f:
             meta = json.load(f)
@@ -225,15 +247,18 @@ class ClientManager:
             name=record.name,
             pubkey=new_pubkey,
             client_ip=record.client_ip,
-            conf_path=record.conf_path,
+            conf_path=conf_path,
             client_ip_v6=record.client_ip_v6,
             created_at=record.created_at,
+            owner=record.owner,
         )
 
     def remove_client_files(self, name: str) -> None:
-        record = self.load_client(name)
-        if record.conf_path and os.path.exists(record.conf_path):
-            os.remove(record.conf_path)
+        self.validate_name(name)
+        self.load_client(name)
+        conf_path = self._conf_path(name)
+        if os.path.exists(conf_path):
+            os.remove(conf_path)
         meta_path = self._meta_path(name)
         if os.path.exists(meta_path):
             os.remove(meta_path)
@@ -247,18 +272,40 @@ class ClientManager:
                 continue
             name = fn[:-5]
             try:
+                self.validate_name(name)
+            except ClientManagerError:
+                self.logger.warning("Skipping client meta with invalid name: %s", fn)
+                continue
+            try:
                 clients.append(self.load_client(name))
             except (ClientManagerError, json.JSONDecodeError):
                 continue
         return clients
 
+    def _client_dir_real(self) -> str:
+        return os.path.realpath(self.client_dir)
+
+    def _assert_path_inside_client_dir(self, path: str) -> str:
+        """Ensure resolved path stays under CLIENT_DIR (defense in depth)."""
+        resolved = os.path.realpath(path)
+        base = self._client_dir_real()
+        if resolved != base and not resolved.startswith(base + os.sep):
+            raise ClientManagerError("Path outside CLIENT_DIR")
+        return path
+
+    def _safe_client_path(self, name: str, suffix: str) -> str:
+        self.validate_name(name)
+        path = os.path.join(self.client_dir, f"{name}{suffix}")
+        return self._assert_path_inside_client_dir(path)
+
     def _meta_path(self, name: str) -> str:
-        return os.path.join(self.client_dir, f"{name}.json")
+        return self._safe_client_path(name, ".json")
 
     def _conf_path(self, name: str) -> str:
-        return os.path.join(self.client_dir, f"{name}.conf")
+        return self._safe_client_path(name, ".conf")
 
     def _atomic_write(self, path: str, data: str, mode: int = 0o600) -> None:
+        self._assert_path_inside_client_dir(path)
         if os.path.exists(path) and os.path.islink(path):
             raise ClientManagerError("Refusing to overwrite symlink")
         dir_name = os.path.dirname(path) or "."

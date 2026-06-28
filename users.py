@@ -86,6 +86,25 @@ class UserManager:
             raise UserManagerError(f"Ошибка записи {self.path}: {e}")
 
     # --- access checks ---
+    def is_superadmin(self, user_id: int) -> bool:
+        """True if user_id is listed in config ALLOWED_USERS."""
+        return user_id in self.superadmins
+
+    def get_user(self, user_id: int) -> Optional[Dict]:
+        for u in self._users:
+            if u["id"] == user_id:
+                return u
+        return None
+
+    def can_manage_operator(self, actor_id: int, target: Dict) -> bool:
+        """Whether actor may remove target operator (not superadmin from config)."""
+        role = target.get("role")
+        if role == "superadmin":
+            return False
+        if role == "admin":
+            return self.is_superadmin(actor_id)
+        return self.is_admin(actor_id)
+
     def is_admin(self, user_id: int) -> bool:
         """Проверяет, является ли пользователь администратором.
 
@@ -135,6 +154,7 @@ class UserManager:
         user_id: int,
         role: str,
         *,
+        actor_id: Optional[int] = None,
         first_name: Optional[str] = None,
         last_name: Optional[str] = None,
         username: Optional[str] = None,
@@ -144,6 +164,7 @@ class UserManager:
         Args:
             user_id (int): ID пользователя Telegram.
             role (str): Роль пользователя. Должна быть "admin" или "user".
+            actor_id (int, optional): ID оператора, выполняющего добавление.
             first_name (str, optional): Имя из Telegram-профиля.
             last_name (str, optional): Фамилия из Telegram-профиля.
             username (str, optional): Username без @.
@@ -154,6 +175,12 @@ class UserManager:
         """
         if role not in ("admin", "user"):
             raise UserManagerError("Роль должна быть 'admin' или 'user'")
+        if (
+            role == "admin"
+            and actor_id is not None
+            and not self.is_superadmin(actor_id)
+        ):
+            raise UserManagerError("Только superadmin может назначать роль admin")
         if any(u["id"] == user_id for u in self._users) or user_id in self.superadmins:
             raise UserManagerError("Пользователь уже существует")
         record: Dict = {"id": user_id, "role": role}
@@ -189,11 +216,12 @@ class UserManager:
             return True
         return False
 
-    def remove_user(self, user_id: int):
+    def remove_user(self, user_id: int, *, actor_id: Optional[int] = None):
         """Удаляет пользователя из списка.
 
         Args:
             user_id (int): ID пользователя Telegram для удаления.
+            actor_id (int, optional): ID оператора, выполняющего удаление.
 
         Raises:
             UserManagerError: Если пользователь является супер-администратором
@@ -201,8 +229,12 @@ class UserManager:
         """
         if user_id in self.superadmins:
             raise UserManagerError("Нельзя удалить супер-админа из конфига")
-        before = len(self._users)
-        self._users = [u for u in self._users if u["id"] != user_id]
-        if len(self._users) == before:
+        target = self.get_user(user_id)
+        if target is None:
             raise UserManagerError("Пользователь не найден")
+        if actor_id is not None and not self.can_manage_operator(actor_id, target):
+            if target.get("role") == "admin":
+                raise UserManagerError("Только superadmin может удалять admin")
+            raise UserManagerError("Недостаточно прав для удаления оператора")
+        self._users = [u for u in self._users if u["id"] != user_id]
         self.save()

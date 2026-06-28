@@ -7,7 +7,9 @@ from dataclasses import dataclass
 from typing import List, Optional
 
 from client_manager import ClientManager, ClientManagerError, ClientRecord
+from client_ownership import can_manage_client
 from config import BotConfig
+from users import UserManager
 from wg_admin_client import PeerInfo, WgAdminClient, WgAdminError
 
 
@@ -36,7 +38,7 @@ class ClientService:
         self.clients = client_manager or ClientManager(cfg)
         self.logger = logger or logging.getLogger("client_service")
 
-    async def create_client(self, name: str) -> CreateClientResult:
+    async def create_client(self, name: str, *, actor_id: int) -> CreateClientResult:
         self.clients.validate_name(name)
         if self.clients.name_exists(name):
             raise ClientServiceError("Client with that name already exists")
@@ -65,7 +67,7 @@ class ClientService:
 
             conf_text = self.clients.build_client_conf(priv, client_ip, client_ip_v6)
             record = self.clients.save_client(
-                name, pub, client_ip, conf_text, client_ip_v6=client_ip_v6
+                name, pub, client_ip, conf_text, client_ip_v6=client_ip_v6, owner=actor_id
             )
         except Exception as e:
             self.logger.error("Failed to save client files for %s, rolling back peer", name)
@@ -80,20 +82,44 @@ class ClientService:
         self.logger.info("Created client %s with IP %s", name, client_ip)
         return CreateClientResult(record=record, conf_text=conf_text)
 
-    async def delete_client(self, name: str) -> None:
-        record = self.clients.load_client(name)
+    async def delete_client(
+        self, client: dict, *, actor_id: int, um: UserManager
+    ) -> None:
+        if not can_manage_client(actor_id, um, client):
+            raise ClientServiceError("Access denied")
+        pubkey = client["pubkey"]
+        storage_name = client.get("storage_name")
+        if storage_name:
+            self.clients.validate_name(storage_name)
+            record = self.clients.load_client(storage_name)
+            if record.pubkey != pubkey:
+                raise ClientServiceError("Client pubkey mismatch")
         try:
-            await self.wg_admin.remove_peer(record.pubkey)
+            await self.wg_admin.remove_peer(pubkey)
         except WgAdminError as e:
             raise ClientServiceError(f"Failed to remove peer on server: {e}") from e
-        try:
-            self.clients.remove_client_files(name)
-        except ClientManagerError as e:
-            raise ClientServiceError(f"Failed to remove client files: {e}") from e
-        self.logger.info("Removed client %s", name)
+        if storage_name:
+            try:
+                self.clients.remove_client_files(storage_name)
+            except ClientManagerError as e:
+                raise ClientServiceError(f"Failed to remove client files: {e}") from e
+        self.logger.info(
+            "Removed client %s",
+            storage_name or client.get("display_name", pubkey[:8]),
+        )
 
-    async def rotate_client(self, name: str) -> CreateClientResult:
-        record = self.clients.load_client(name)
+    async def rotate_client(
+        self, storage_name: str, *, actor_id: int, um: UserManager
+    ) -> CreateClientResult:
+        self.clients.validate_name(storage_name)
+        record = self.clients.load_client(storage_name)
+        client = {
+            "storage_name": storage_name,
+            "has_local_conf": True,
+            "owner": record.owner,
+        }
+        if not can_manage_client(actor_id, um, client):
+            raise ClientServiceError("Access denied")
         old_pub = record.pubkey
         priv, new_pub = self.clients.generate_keypair()
 
@@ -106,11 +132,11 @@ class ClientService:
             conf_text = self.clients.build_client_conf(
                 priv, record.client_ip, record.client_ip_v6
             )
-            updated = self.clients.update_client_after_rotate(name, new_pub, conf_text)
+            updated = self.clients.update_client_after_rotate(storage_name, new_pub, conf_text)
         except Exception as e:
             self.logger.critical(
                 "Client %s rotated on server (pubkey=%s...) but conf save failed: %s",
-                name,
+                storage_name,
                 new_pub[:8],
                 e,
             )
@@ -118,7 +144,7 @@ class ClientService:
                 f"Peer rotated on server but failed to save new conf — manual reissue required"
             ) from e
 
-        self.logger.info("Rotated keys for client %s", name)
+        self.logger.info("Rotated keys for client %s", storage_name)
         return CreateClientResult(record=updated, conf_text=conf_text)
 
     async def list_clients_merged(self) -> List[dict]:
@@ -136,14 +162,13 @@ class ClientService:
         result = []
         for name, rec in local.items():
             peer = by_desc.get(name) or by_pub.get(rec.pubkey)
-            result.append(_merge_client(name, rec, peer))
+            result.append(_merge_client(rec, peer))
             seen.add(rec.pubkey)
 
         for peer in peers:
             if peer.public_key in seen:
                 continue
-            name = peer.description or peer.public_key[:8] + "..."
-            result.append(_merge_client(name, None, peer))
+            result.append(_merge_client(None, peer))
 
         return result
 
@@ -155,15 +180,35 @@ class ClientService:
         raise ClientServiceError("Peer not found after add")
 
 
-def _merge_client(name: str, local: Optional[ClientRecord], peer: Optional[PeerInfo]) -> dict:
+def _orphan_display_name(peer: PeerInfo) -> str:
+    if peer.description:
+        return peer.description
+    return peer.public_key[:8] + "..."
+
+
+def _merge_client(local: Optional[ClientRecord], peer: Optional[PeerInfo]) -> dict:
+    pubkey = local.pubkey if local else (peer.public_key if peer else "")
+    if local:
+        display_name = local.name
+        storage_name = local.name
+        has_local_conf = True
+    else:
+        assert peer is not None
+        display_name = _orphan_display_name(peer)
+        storage_name = None
+        has_local_conf = False
+
     return {
-        "name": name,
+        "name": display_name,
+        "display_name": display_name,
+        "storage_name": storage_name,
         "ip": local.client_ip if local else (peer.allowed_ips[0] if peer and peer.allowed_ips else ""),
         "ip_v6": local.client_ip_v6 if local else "",
-        "pubkey": (local.pubkey if local else peer.public_key if peer else ""),
+        "pubkey": pubkey,
         "endpoint": peer.endpoint if peer else "",
         "latest_handshake": peer.latest_handshake if peer else None,
         "transfer_rx": peer.transfer_rx if peer else 0,
         "transfer_tx": peer.transfer_tx if peer else 0,
-        "has_local_conf": local is not None,
+        "has_local_conf": has_local_conf,
+        "owner": local.owner if local else None,
     }

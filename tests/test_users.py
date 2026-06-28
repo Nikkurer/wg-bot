@@ -114,6 +114,46 @@ class TestUserManager:
         with pytest.raises(UserManagerError, match="уже существует"):
             user_manager.add_user(123456789, "user")
 
+    def test_is_superadmin(self, user_manager):
+        assert user_manager.is_superadmin(123456789) is True
+        assert user_manager.is_superadmin(999) is False
+
+    def test_add_admin_requires_superadmin_actor(self, user_manager):
+        user_manager.add_user(888, "admin")
+        with pytest.raises(UserManagerError, match="superadmin"):
+            user_manager.add_user(111, "admin", actor_id=888)
+
+    def test_superadmin_can_add_admin(self, user_manager):
+        user_manager.add_user(111, "admin", actor_id=123456789)
+        assert user_manager._users[0]["role"] == "admin"
+
+    def test_remove_admin_requires_superadmin_actor(self, user_manager):
+        user_manager.add_user(222, "admin")
+        user_manager.add_user(888, "admin")
+        with pytest.raises(UserManagerError, match="superadmin"):
+            user_manager.remove_user(222, actor_id=888)
+
+    def test_superadmin_can_remove_admin(self, user_manager):
+        user_manager.add_user(222, "admin")
+        user_manager.remove_user(222, actor_id=123456789)
+        assert user_manager.get_user(222) is None
+
+    def test_admin_can_remove_user(self, user_manager):
+        user_manager.add_user(888, "admin")
+        user_manager.add_user(111, "user")
+        user_manager.remove_user(111, actor_id=888)
+        assert user_manager.get_user(111) is None
+
+    def test_can_manage_operator(self, user_manager):
+        user_manager.add_user(888, "admin")
+        admin = {"id": 888, "role": "admin"}
+        user = {"id": 111, "role": "user"}
+        sa = {"id": 123456789, "role": "superadmin"}
+        assert user_manager.can_manage_operator(123456789, admin) is True
+        assert user_manager.can_manage_operator(888, admin) is False
+        assert user_manager.can_manage_operator(888, user) is True
+        assert user_manager.can_manage_operator(888, sa) is False
+
     def test_remove_user_success(self, user_manager):
         """Тест: успешное удаление пользователя."""
         user_manager.add_user(111, "user")
