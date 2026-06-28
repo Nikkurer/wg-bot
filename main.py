@@ -89,6 +89,7 @@ from operator_add import (
 )
 from service import ClientService, ClientServiceError
 from states import AddClientStates, AddUserStates
+from status_format import format_status_error, format_status_message
 from users import UserManager
 from wg_admin_client import DriftReport, WgAdminClient, WgAdminError
 
@@ -378,7 +379,7 @@ async def handle_menu(
     await state.clear()
 
     if text == BTN_STATUS:
-        await cmd_status(message, wg_admin, cfg, um)
+        await cmd_status(message, wg_admin, cfg, service, um)
     elif text == BTN_CLIENTS:
         await cmd_listclients(message, service, um)
     elif text == BTN_HELP:
@@ -577,7 +578,7 @@ async def cmd_help(message: Message, um: UserManager):
     lines = [
         "WireGuard management bot:\n",
         "Меню:",
-        f"  {BTN_STATUS} — статус WireGuard",
+        f"  {BTN_STATUS} — статус VPN-сервера и сводка по клиентам",
         f"  {BTN_CLIENTS} — список клиентов (на карточке — статистика)",
         f"  {BTN_HELP} — эта справка",
         f"  {BTN_ADD_CLIENT} — создать нового клиента",
@@ -612,39 +613,45 @@ async def cmd_help(message: Message, um: UserManager):
 
 
 async def cmd_status(
-    message: Message, wg_admin: WgAdminClient, cfg: BotConfig, um: UserManager
+    message: Message,
+    wg_admin: WgAdminClient,
+    cfg: BotConfig,
+    service: ClientService,
+    um: UserManager,
 ):
     """Обработчик команды /status."""
     if not um.is_user(message.from_user.id):
         await message.answer("Access denied.")
         return
+
+    actor_id = message.from_user.id
+    is_admin = um.is_admin(actor_id)
     try:
         status = await wg_admin.interface_status()
-        text = [
-            f"🔐 Interface: <b>{html.escape(status.name or 'unknown')}</b>",
-            f"📡 State: {html.escape(status.state or 'unknown')}",
-            "",
-            "👥 Peers:",
-        ]
-        if not status.peers:
-            text.append("— нет пиров")
-        for p in status.peers:
-            label = html.escape(p.description or p.public_key[:12] + "...")
-            text.append(
-                f"— <b>{label}</b> <code>{html.escape(p.public_key[:16])}...</code>\n"
-                f"   ➤ Endpoint: {html.escape(p.endpoint or '—')}\n"
-                f"   ➤ IPs: {html.escape(', '.join(p.allowed_ips) or '—')}\n"
-                f"   ➤ Last handshake: {format_handshake(p.latest_handshake)}\n"
-                f"   ➤ Traffic: ⬇️ {format_bytes(p.transfer_rx)} | ⬆️ {format_bytes(p.transfer_tx)}"
-            )
-
-        await message.answer("\n".join(text), parse_mode="HTML")
+        clients = await sorted_clients(service)
+        if not is_admin:
+            clients = filter_clients_for_actor(clients, actor_id, um)
+        drift_report = None
+        if is_admin:
+            drift_report = await wg_admin.detect_drift()
+        text = format_status_message(
+            status=status,
+            clients=clients,
+            cfg=cfg,
+            is_admin=is_admin,
+            online_threshold_sec=cfg.status_online_threshold_sec,
+            drift_report=drift_report,
+        )
+        await message.answer(text)
     except WgAdminError as e:
-        infoLog.error(f"Status failed: {e}")
-        await message.answer(f"Error: {e}")
+        infoLog.error("Status failed: %s", e)
+        await message.answer(format_status_error(is_admin=is_admin, error=str(e)))
+    except ClientServiceError as e:
+        infoLog.error("Status failed: %s", e)
+        await message.answer(format_status_error(is_admin=is_admin, error=str(e)))
     except Exception as e:
-        infoLog.error(f"Status failed: {e}")
-        await message.answer(f"Error: {e}")
+        infoLog.error("Status failed: %s", traceback.format_exc())
+        await message.answer(format_status_error(is_admin=is_admin, error=str(e)))
 
 
 async def cmd_addclient(
@@ -1403,7 +1410,8 @@ async def main():
     dp.message.register(partial(cmd_start, um=um), Command("start"))
     dp.message.register(partial(cmd_help, um=um), Command("help"))
     dp.message.register(
-        partial(cmd_status, wg_admin=wg_admin, cfg=bot_cfg, um=um), Command("status")
+        partial(cmd_status, wg_admin=wg_admin, cfg=bot_cfg, service=service, um=um),
+        Command("status"),
     )
     dp.message.register(partial(cmd_addclient, service=service, um=um), Command("addclient"))
     dp.message.register(

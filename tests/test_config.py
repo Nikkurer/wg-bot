@@ -45,6 +45,11 @@ class TestLoadConfig:
         assert cfg.wg_admin_socket == "/run/wg-admin/wg-admin.sock"
         assert cfg.wg_client_port == 443
 
+    def test_load_status_threshold(self, config_file):
+        path = config_file(STATUS_ONLINE_THRESHOLD_SEC=300)
+        cfg = load_config(str(path))
+        assert cfg.status_online_threshold_sec == 300
+
     def test_load_v2_fields(self, config_file):
         path = config_file(
             WG_SUBNET_V6="fd66:66::/64",

@@ -52,6 +52,7 @@ class BotConfig:
     wg_dns: str = "10.66.66.1"
     client_allowed_ips: str = "0.0.0.0/0, ::/0"
     persistent_keepalive: int = 25
+    status_online_threshold_sec: int = 180
 
     def as_dict(self) -> dict:
         """Словарь для обратной совместимости с handlers v1."""
@@ -73,6 +74,7 @@ class BotConfig:
             "WG_DNS": self.wg_dns,
             "CLIENT_ALLOWED_IPS": self.client_allowed_ips,
             "PERSISTENT_KEEPALIVE": self.persistent_keepalive,
+            "STATUS_ONLINE_THRESHOLD_SEC": self.status_online_threshold_sec,
         }
 
     def endpoint_host(self) -> str:
@@ -157,6 +159,7 @@ def load_config(path: str, *, check_client_dir: bool = True) -> BotConfig:
         wg_dns=str(raw.get("WG_DNS", "10.66.66.1")),
         client_allowed_ips=str(raw.get("CLIENT_ALLOWED_IPS", "0.0.0.0/0, ::/0")),
         persistent_keepalive=int(raw.get("PERSISTENT_KEEPALIVE", 25)),
+        status_online_threshold_sec=int(raw.get("STATUS_ONLINE_THRESHOLD_SEC", 180)),
     )
 
     for cfg_field, env_name in ENV_OVERRIDES.items():
