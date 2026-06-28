@@ -1,5 +1,6 @@
 """Tests for client_manager.py."""
 import json
+import os
 from unittest.mock import patch
 
 import pytest
@@ -88,6 +89,34 @@ class TestClientManager:
         manager.save_client("bob", "pk", "10.66.66.11/32", "conf")
         manager.remove_client_files("bob")
         assert not manager.name_exists("bob")
+
+    def test_load_client_rejects_path_traversal_name(self, manager):
+        with pytest.raises(ClientManagerError, match="Invalid"):
+            manager.load_client("../state/users")
+
+    def test_remove_client_files_rejects_path_traversal_name(self, manager):
+        with pytest.raises(ClientManagerError, match="Invalid"):
+            manager.remove_client_files("../state/users")
+
+    def test_load_client_ignores_conf_path_from_meta(self, manager, bot_config):
+        manager.save_client("alice", "pubkey123", "10.66.66.10/32", "conf")
+        meta_path = manager._meta_path("alice")
+        with open(meta_path, "r", encoding="utf-8") as f:
+            meta = json.load(f)
+        meta["conf_path"] = "/etc/passwd"
+        with open(meta_path, "w", encoding="utf-8") as f:
+            json.dump(meta, f)
+        loaded = manager.load_client("alice")
+        assert loaded.conf_path == manager._conf_path("alice")
+        assert manager.read_conf("alice") == "conf"
+
+    def test_list_local_clients_skips_invalid_meta_filename(self, manager, bot_config):
+        bad_meta = os.path.join(bot_config.client_dir, "../evil.json")
+        with open(bad_meta, "w", encoding="utf-8") as f:
+            json.dump({"name": "evil", "pubkey": "pk"}, f)
+        manager.save_client("good", "pk2", "10.66.66.12/32", "conf")
+        names = [c.name for c in manager.list_local_clients()]
+        assert names == ["good"]
 
     def test_update_client_after_rotate(self, manager):
         manager.save_client("carol", "oldpk", "10.66.66.12/32", "old conf")

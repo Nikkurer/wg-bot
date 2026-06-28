@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from client_manager import ClientManager
+from client_manager import ClientManager, ClientManagerError
 from config import BotConfig
 from service import ClientService, ClientServiceError
 from wg_admin_client import PeerInfo, WgAdminClient, WgAdminError
@@ -82,6 +82,11 @@ class TestClientService:
             with pytest.raises(ClientServiceError, match="Failed to save"):
                 await service.create_client("bob")
         wg_admin.remove_peer.assert_awaited_once_with("pub")
+
+    @pytest.mark.asyncio
+    async def test_delete_client_rejects_invalid_name(self, service):
+        with pytest.raises(ClientManagerError, match="Invalid"):
+            await service.delete_client("../state/users")
 
     @pytest.mark.asyncio
     async def test_delete_client(self, service, wg_admin):

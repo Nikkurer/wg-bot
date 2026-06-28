@@ -81,6 +81,7 @@ class ClientService:
         return CreateClientResult(record=record, conf_text=conf_text)
 
     async def delete_client(self, name: str) -> None:
+        self.clients.validate_name(name)
         record = self.clients.load_client(name)
         try:
             await self.wg_admin.remove_peer(record.pubkey)
@@ -93,6 +94,7 @@ class ClientService:
         self.logger.info("Removed client %s", name)
 
     async def rotate_client(self, name: str) -> CreateClientResult:
+        self.clients.validate_name(name)
         record = self.clients.load_client(name)
         old_pub = record.pubkey
         priv, new_pub = self.clients.generate_keypair()

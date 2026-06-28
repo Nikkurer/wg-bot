@@ -466,6 +466,11 @@ async def prompt_remove(message: Message, service: ClientService, pubkey: str):
 
 
 async def prompt_rotate_by_name(message: Message, service: ClientService, name: str):
+    try:
+        service.clients.validate_name(name)
+    except ClientManagerError:
+        await message.answer(f"Invalid client name: {name!r}")
+        return
     clients = await sorted_clients(service)
     client = client_by_name(clients, name)
     if client is None:
@@ -475,6 +480,11 @@ async def prompt_rotate_by_name(message: Message, service: ClientService, name: 
 
 
 async def prompt_remove_by_name(message: Message, service: ClientService, name: str):
+    try:
+        service.clients.validate_name(name)
+    except ClientManagerError:
+        await message.answer(f"Invalid client name: {name!r}")
+        return
     clients = await sorted_clients(service)
     client = client_by_name(clients, name)
     if client is None:
