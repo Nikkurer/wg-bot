@@ -9,7 +9,15 @@ Callback prefixes (max 64 bytes total in callback_data):
   remove:confirm:{name}   — execute client removal
   remove:cancel           — cancel removal dialog
   addclient:cancel        — cancel add-client dialog (FSM)
+  useradd:start           — start add-operator dialog (FSM)
+  useradd:cancel          — cancel add-operator dialog
+  useradd:role:{id}:{role} — confirm operator role (admin|user)
+  userremove:ask:{id}     — prompt operator removal confirm
+  userremove:confirm:{id} — execute operator removal
+  userremove:cancel       — cancel operator removal dialog
 """
+
+from typing import Optional
 
 from aiogram.types import (
     InlineKeyboardButton,
@@ -40,6 +48,12 @@ CB_REMOVE_ASK = "remove:ask"
 CB_REMOVE_CONFIRM = "remove:confirm"
 CB_REMOVE_CANCEL = "remove:cancel"
 CB_ADDCLIENT_CANCEL = "addclient:cancel"
+CB_USER_ADD_START = "useradd:start"
+CB_USER_ADD_CANCEL = "useradd:cancel"
+CB_USER_ADD_ROLE = "useradd:role"
+CB_USER_REMOVE_ASK = "userremove:ask"
+CB_USER_REMOVE_CONFIRM = "userremove:confirm"
+CB_USER_REMOVE_CANCEL = "userremove:cancel"
 
 
 def main_menu(is_admin: bool) -> ReplyKeyboardMarkup:
@@ -113,6 +127,85 @@ def add_client_cancel_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(
                     text="❌ Отмена", callback_data=CB_ADDCLIENT_CANCEL
                 )
+            ]
+        ]
+    )
+
+
+def operator_row_keyboard(user_id: int, role: str) -> Optional[InlineKeyboardMarkup]:
+    """Inline actions for a single operator row. Superadmin has no remove button."""
+    if role == "superadmin":
+        return None
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🗑 Удалить",
+                    callback_data=f"{CB_USER_REMOVE_ASK}:{user_id}",
+                )
+            ]
+        ]
+    )
+
+
+def operators_footer_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="➕ Добавить оператора",
+                    callback_data=CB_USER_ADD_START,
+                )
+            ]
+        ]
+    )
+
+
+def add_user_cancel_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="❌ Отмена", callback_data=CB_USER_ADD_CANCEL
+                )
+            ]
+        ]
+    )
+
+
+def add_user_role_keyboard(user_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="admin",
+                    callback_data=f"{CB_USER_ADD_ROLE}:{user_id}:admin",
+                ),
+                InlineKeyboardButton(
+                    text="user",
+                    callback_data=f"{CB_USER_ADD_ROLE}:{user_id}:user",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="❌ Отмена", callback_data=CB_USER_ADD_CANCEL
+                )
+            ],
+        ]
+    )
+
+
+def operator_remove_confirm_keyboard(user_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ Удалить",
+                    callback_data=f"{CB_USER_REMOVE_CONFIRM}:{user_id}",
+                ),
+                InlineKeyboardButton(
+                    text="❌ Отмена", callback_data=CB_USER_REMOVE_CANCEL
+                ),
             ]
         ]
     )

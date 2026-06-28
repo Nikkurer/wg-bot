@@ -43,14 +43,25 @@ from keyboards import (
     CB_ROTATE_ASK,
     CB_ROTATE_CANCEL,
     CB_ROTATE_CONFIRM,
+    CB_USER_ADD_CANCEL,
+    CB_USER_ADD_ROLE,
+    CB_USER_ADD_START,
+    CB_USER_REMOVE_ASK,
+    CB_USER_REMOVE_CANCEL,
+    CB_USER_REMOVE_CONFIRM,
     add_client_cancel_keyboard,
+    add_user_cancel_keyboard,
+    add_user_role_keyboard,
     client_actions_keyboard,
     main_menu,
+    operator_remove_confirm_keyboard,
+    operator_row_keyboard,
+    operators_footer_keyboard,
     remove_confirm_keyboard,
     rotate_confirm_keyboard,
 )
 from service import ClientService, ClientServiceError
-from states import AddClientStates
+from states import AddClientStates, AddUserStates
 from users import UserManager
 from wg_admin_client import DriftReport, WgAdminClient, WgAdminError
 
@@ -326,8 +337,7 @@ async def handle_menu(
         return
 
     text = message.text
-    if text != BTN_ADD_CLIENT:
-        await state.clear()
+    await state.clear()
 
     if text == BTN_STATUS:
         await cmd_status(message, wg_admin, cfg, um)
@@ -418,7 +428,7 @@ async def cmd_help(message: Message, um: UserManager):
         lines += [
             f"  {BTN_ADD_CLIENT} — создать нового клиента",
             f"  {BTN_DRIFT} — проверка drift wg-admin vs WireGuard",
-            f"  {BTN_OPERATORS} — список операторов",
+            f"  {BTN_OPERATORS} — список операторов (добавить / удалить)",
             "",
             "На карточке клиента (admin): 🔄 Ротация, 🗑 Удалить",
             "",
@@ -498,6 +508,8 @@ async def cmd_addclient(
 async def fsm_addclient_name(
     message: Message,
     state: FSMContext,
+    wg_admin: WgAdminClient,
+    cfg: BotConfig,
     service: ClientService,
     um: UserManager,
 ):
@@ -505,6 +517,11 @@ async def fsm_addclient_name(
     if not um.is_admin(message.from_user.id):
         await state.clear()
         await message.answer("Access denied.")
+        return
+
+    if message.text in ADMIN_MENU_BUTTONS:
+        await state.clear()
+        await handle_menu(message, state, wg_admin, cfg, service, um)
         return
 
     name = message.text.strip()
@@ -697,23 +714,60 @@ async def cb_remove(callback: CallbackQuery, service: ClientService, um: UserMan
 
 
 # --- user management handlers ---
+async def do_add_user(bot: Bot, um: UserManager, user_id: int, role: str) -> None:
+    """Добавляет оператора и обновляет меню команд."""
+    um.add_user(user_id, role)
+    await apply_command_menus(bot, um)
+
+
+async def do_remove_user(bot: Bot, um: UserManager, user_id: int) -> None:
+    """Удаляет оператора и сбрасывает его меню команд."""
+    um.remove_user(user_id)
+    try:
+        await bot.delete_my_commands(scope=BotCommandScopeChat(chat_id=user_id))
+    except TelegramBadRequest:
+        pass
+
+
+async def prompt_add_user(message: Message, state: FSMContext):
+    """Запускает диалог добавления оператора (FSM)."""
+    await state.set_state(AddUserStates.waiting_for_id)
+    await message.answer(
+        "Введите Telegram ID нового оператора.\n"
+        "ID можно узнать у @userinfobot или из пересланного сообщения.",
+        reply_markup=add_user_cancel_keyboard(),
+    )
+
+
+async def prompt_remove_user(message: Message, user_id: int):
+    """Запрос подтверждения удаления оператора."""
+    await message.answer(
+        f"⚠️ Удалить оператора {user_id}?\n\n"
+        "Пользователь потеряет доступ к боту.",
+        reply_markup=operator_remove_confirm_keyboard(user_id),
+    )
+
+
 async def cmd_listusers(message: Message, um: UserManager):
-    """Обработчик команды /listusers.
-
-    Отправляет администратору список всех пользователей бота с их ролями.
-
-    Args:
-        message (Message): Сообщение от пользователя.
-        um (UserManager): Менеджер пользователей.
-    """
+    """Список операторов с inline-кнопками управления."""
     if not um.is_admin(message.from_user.id):
         await message.answer("Access denied.")
         return
     users = um.list_users()
-    text = "Список пользователей:\n\n"
+    if not users:
+        await message.answer(
+            "Нет операторов.",
+            reply_markup=operators_footer_keyboard(),
+        )
+        return
     for u in users:
-        text += f"👤 {u['id']} — {u['role']}\n"
-    await message.answer(text)
+        text = f"👤 {u['id']} — {u['role']}"
+        kb = operator_row_keyboard(u["id"], u["role"])
+        await message.answer(text, reply_markup=kb)
+    await message.answer(
+        "Управление операторами:",
+        reply_markup=operators_footer_keyboard(),
+    )
 
 
 async def cmd_adduser(message: Message, command: CommandObject, um: UserManager):
@@ -730,15 +784,117 @@ async def cmd_adduser(message: Message, command: CommandObject, um: UserManager)
         await message.answer("Access denied.")
         return
     if not command.args:
-        await message.answer("Usage: /adduser <id> <role>")
+        await message.answer(
+            "Usage: /adduser <id> <role>\n"
+            f"Или откройте {BTN_OPERATORS} и нажмите ➕ Добавить оператора."
+        )
         return
     try:
         user_id_str, role = command.args.split(maxsplit=1)
-        um.add_user(int(user_id_str), role)
-        await apply_command_menus(message.bot, um)
+        await do_add_user(message.bot, um, int(user_id_str), role)
         await message.answer(f"✅ Пользователь {user_id_str} добавлен с ролью {role}.")
     except Exception as e:
         await message.answer(f"❌ Ошибка: {e}")
+
+
+async def fsm_adduser_id(
+    message: Message,
+    state: FSMContext,
+    wg_admin: WgAdminClient,
+    cfg: BotConfig,
+    service: ClientService,
+    um: UserManager,
+):
+    """Принимает Telegram ID в диалоге добавления оператора."""
+    if not um.is_admin(message.from_user.id):
+        await state.clear()
+        await message.answer("Access denied.")
+        return
+
+    if message.text in ADMIN_MENU_BUTTONS:
+        await state.clear()
+        await handle_menu(message, state, wg_admin, cfg, service, um)
+        return
+
+    text = message.text.strip()
+    if not text.isdigit():
+        await message.answer(
+            "Введите числовой Telegram ID.\n"
+            "Попробуйте ещё раз или нажмите ❌ Отмена."
+        )
+        return
+
+    user_id = int(text)
+    await state.clear()
+    await message.answer(
+        f"Выберите роль для оператора {user_id}:",
+        reply_markup=add_user_role_keyboard(user_id),
+    )
+
+
+async def cb_useradd(callback: CallbackQuery, state: FSMContext, um: UserManager):
+    """Старт, выбор роли или отмена добавления оператора."""
+    if not um.is_admin(callback.from_user.id):
+        await callback.answer("Access denied.", show_alert=True)
+        return
+
+    if callback.data == CB_USER_ADD_CANCEL:
+        await state.clear()
+        await callback.message.edit_text("Добавление оператора отменено.")
+        await callback.answer()
+        return
+
+    if callback.data == CB_USER_ADD_START:
+        await prompt_add_user(callback.message, state)
+        await callback.answer()
+        return
+
+    if callback.data.startswith(f"{CB_USER_ADD_ROLE}:"):
+        payload = callback.data[len(f"{CB_USER_ADD_ROLE}:") :]
+        user_id_str, role = payload.split(":", 1)
+        user_id = int(user_id_str)
+        try:
+            await do_add_user(callback.message.bot, um, user_id, role)
+            await callback.message.edit_text(
+                f"✅ Пользователь {user_id} добавлен с ролью {role}."
+            )
+        except Exception as e:
+            await callback.message.edit_text(f"❌ Ошибка: {e}")
+        await callback.answer()
+        return
+
+    await callback.answer()
+
+
+async def cb_userremove(callback: CallbackQuery, um: UserManager):
+    """Запрос, подтверждение или отмена удаления оператора."""
+    if not um.is_admin(callback.from_user.id):
+        await callback.answer("Access denied.", show_alert=True)
+        return
+
+    if callback.data == CB_USER_REMOVE_CANCEL:
+        await callback.message.edit_text("Удаление оператора отменено.")
+        await callback.answer()
+        return
+
+    if callback.data.startswith(f"{CB_USER_REMOVE_ASK}:"):
+        user_id = int(callback.data.split(":", 2)[2])
+        await prompt_remove_user(callback.message, user_id)
+        await callback.answer()
+        return
+
+    if not callback.data.startswith(f"{CB_USER_REMOVE_CONFIRM}:"):
+        await callback.answer()
+        return
+
+    user_id = int(callback.data.split(":", 2)[2])
+    try:
+        await do_remove_user(callback.message.bot, um, user_id)
+        await callback.message.edit_text(f"✅ Пользователь {user_id} удалён.")
+        await callback.answer()
+    except Exception as e:
+        await callback.message.edit_text(f"❌ Ошибка: {e}")
+        await callback.answer()
 
 
 async def cmd_removeuser(message: Message, command: CommandObject, um: UserManager):
@@ -755,20 +911,16 @@ async def cmd_removeuser(message: Message, command: CommandObject, um: UserManag
         await message.answer("Access denied.")
         return
     if not command.args:
-        await message.answer("Usage: /removeuser <id>")
+        await message.answer(
+            "Usage: /removeuser <id>\n"
+            f"Или откройте {BTN_OPERATORS} и нажмите 🗑 Удалить на карточке оператора."
+        )
         return
     try:
         removed_id = int(command.args.strip())
-        um.remove_user(removed_id)
-        try:
-            await message.bot.delete_my_commands(
-                scope=BotCommandScopeChat(chat_id=removed_id)
-            )
-        except TelegramBadRequest:
-            pass
-        await message.answer(f"✅ Пользователь {removed_id} удалён.")
-    except Exception as e:
-        await message.answer(f"❌ Ошибка: {e}")
+        await prompt_remove_user(message, removed_id)
+    except ValueError:
+        await message.answer("❌ Ошибка: ID должен быть числом.")
 
 
 # --- main ---
@@ -833,8 +985,26 @@ async def main():
     dp.message.register(partial(cmd_removeuser, um=um), Command("removeuser"))
 
     dp.message.register(
-        partial(fsm_addclient_name, service=service, um=um),
+        partial(
+            fsm_addclient_name,
+            wg_admin=wg_admin,
+            cfg=bot_cfg,
+            service=service,
+            um=um,
+        ),
         StateFilter(AddClientStates.waiting_for_name),
+        F.text,
+    )
+
+    dp.message.register(
+        partial(
+            fsm_adduser_id,
+            wg_admin=wg_admin,
+            cfg=bot_cfg,
+            service=service,
+            um=um,
+        ),
+        StateFilter(AddUserStates.waiting_for_id),
         F.text,
     )
 
@@ -864,6 +1034,12 @@ async def main():
     )
     dp.callback_query.register(
         partial(cb_addclient_cancel, um=um), F.data == CB_ADDCLIENT_CANCEL
+    )
+    dp.callback_query.register(
+        partial(cb_useradd, um=um), F.data.startswith("useradd:")
+    )
+    dp.callback_query.register(
+        partial(cb_userremove, um=um), F.data.startswith("userremove:")
     )
 
     await apply_command_menus(bot, um)
