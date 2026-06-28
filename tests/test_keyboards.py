@@ -160,8 +160,12 @@ def test_operator_row_superadmin_has_no_remove():
     assert operator_row_keyboard(111, "superadmin") is None
 
 
+def test_operator_row_admin_no_remove_without_permission():
+    assert operator_row_keyboard(222, "admin", allow_remove=False) is None
+
+
 def test_operator_row_admin_has_remove():
-    kb = operator_row_keyboard(222, "admin")
+    kb = operator_row_keyboard(222, "admin", allow_remove=True)
     assert kb.inline_keyboard[0][0].callback_data == f"{CB_USER_REMOVE_ASK}:222"
 
 
@@ -174,8 +178,15 @@ def test_add_user_pick_keyboard_has_request_users():
     assert btn.request_users.max_quantity == 1
 
 
+def test_add_user_role_keyboard_user_only_without_admin():
+    kb = add_user_role_keyboard(333, allow_admin=False)
+    callbacks = [btn.callback_data for row in kb.inline_keyboard for btn in row]
+    assert f"{CB_USER_ADD_ROLE}:333:user" in callbacks
+    assert not any(":admin" in c for c in callbacks)
+
+
 def test_add_user_role_keyboard_has_admin_and_user():
-    kb = add_user_role_keyboard(333)
+    kb = add_user_role_keyboard(333, allow_admin=True)
     callbacks = [btn.callback_data for row in kb.inline_keyboard for btn in row]
     assert f"{CB_USER_ADD_ROLE}:333:admin" in callbacks
     assert f"{CB_USER_ADD_ROLE}:333:user" in callbacks

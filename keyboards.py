@@ -217,9 +217,11 @@ def add_client_cancel_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-def operator_row_keyboard(user_id: int, role: str) -> Optional[InlineKeyboardMarkup]:
-    """Inline actions for a single operator row. Superadmin has no remove button."""
-    if role == "superadmin":
+def operator_row_keyboard(
+    user_id: int, role: str, *, allow_remove: bool = True
+) -> Optional[InlineKeyboardMarkup]:
+    """Inline actions for a single operator row."""
+    if role == "superadmin" or not allow_remove:
         return None
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -279,19 +281,24 @@ def add_user_pick_keyboard() -> ReplyKeyboardMarkup:
     )
 
 
-def add_user_role_keyboard(user_id: int) -> InlineKeyboardMarkup:
+def add_user_role_keyboard(user_id: int, *, allow_admin: bool = True) -> InlineKeyboardMarkup:
+    role_row = [
+        InlineKeyboardButton(
+            text="user",
+            callback_data=build_callback_data(CB_USER_ADD_ROLE, user_id, "user"),
+        ),
+    ]
+    if allow_admin:
+        role_row.insert(
+            0,
+            InlineKeyboardButton(
+                text="admin",
+                callback_data=build_callback_data(CB_USER_ADD_ROLE, user_id, "admin"),
+            ),
+        )
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="admin",
-                    callback_data=build_callback_data(CB_USER_ADD_ROLE, user_id, "admin"),
-                ),
-                InlineKeyboardButton(
-                    text="user",
-                    callback_data=build_callback_data(CB_USER_ADD_ROLE, user_id, "user"),
-                ),
-            ],
+            role_row,
             [
                 InlineKeyboardButton(
                     text="❌ Отмена",
