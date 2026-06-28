@@ -5,6 +5,51 @@ from typing import List, Dict, Optional
 
 from operator_add import profile_from_fields
 
+_VALID_ROLES = frozenset({"admin", "user"})
+_PROFILE_KEYS = frozenset({"first_name", "last_name", "username"})
+_ALLOWED_KEYS = frozenset({"id", "role"}) | _PROFILE_KEYS
+
+
+def _validate_user_record(record, index: int) -> Dict:
+    if not isinstance(record, dict):
+        raise UserManagerError(
+            f"Запись {index}: ожидается объект, получено {type(record).__name__}"
+        )
+    unknown = set(record.keys()) - _ALLOWED_KEYS
+    if unknown:
+        raise UserManagerError(
+            f"Запись {index}: неизвестные поля: {', '.join(sorted(unknown))}"
+        )
+    if "id" not in record or "role" not in record:
+        raise UserManagerError(f"Запись {index}: обязательные поля id и role")
+    user_id = record["id"]
+    if type(user_id) is not int:
+        raise UserManagerError(f"Запись {index}: id должен быть int")
+    role = record["role"]
+    if not isinstance(role, str) or role not in _VALID_ROLES:
+        raise UserManagerError(
+            f"Запись {index}: роль должна быть 'admin' или 'user'"
+        )
+    for key in _PROFILE_KEYS:
+        if key in record and not isinstance(record[key], str):
+            raise UserManagerError(f"Запись {index}: {key} должен быть строкой")
+    return record
+
+
+def _validate_users(data, path: str) -> List[Dict]:
+    if not isinstance(data, list):
+        raise UserManagerError(f"Ожидается JSON-массив в {path}")
+    seen_ids: set[int] = set()
+    validated: List[Dict] = []
+    for index, record in enumerate(data):
+        entry = _validate_user_record(record, index)
+        user_id = entry["id"]
+        if user_id in seen_ids:
+            raise UserManagerError(f"Запись {index}: дублирующийся id {user_id}")
+        seen_ids.add(user_id)
+        validated.append(entry)
+    return validated
+
 
 class UserManagerError(Exception):
     """Исключение для ошибок управления пользователями бота.
@@ -35,26 +80,22 @@ class UserManager:
         self.load()
 
     # --- utils ---
-    def _atomic_write(self, data: str):
-        """Атомарно записывает строку в файл.
-
-        Создаёт временный файл, записывает данные, синхронизирует на диск
-        и затем атомарно заменяет целевой файл. Это предотвращает повреждение
-        данных при сбоях во время записи.
-
-        Args:
-            data (str): Данные для записи в файл.
-
-        Raises:
-            OSError: Если произошла ошибка при записи или замене файла.
-        """
+    def _atomic_write(self, data: str, mode: int = 0o600) -> None:
+        """Атомарно записывает строку в файл с заданными правами доступа."""
+        if os.path.exists(self.path) and os.path.islink(self.path):
+            raise UserManagerError("Refusing to overwrite symlink")
         dir_name = os.path.dirname(self.path) or "."
-        with tempfile.NamedTemporaryFile("w", dir=dir_name, delete=False) as tmp:
-            tmp.write(data)
-            tmp.flush()
-            os.fsync(tmp.fileno())
-            tmp_name = tmp.name
-        os.replace(tmp_name, self.path)
+        base_name = os.path.basename(self.path)
+        fd, tmp_path = tempfile.mkstemp(prefix=base_name, dir=dir_name, text=True)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(data)
+            os.chmod(tmp_path, mode)
+            os.replace(tmp_path, self.path)
+        except Exception:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+            raise
 
     def load(self):
         """Загружает пользователей из JSON файла.
@@ -69,7 +110,10 @@ class UserManager:
             return
         try:
             with open(self.path, "r", encoding="utf-8") as f:
-                self._users = json.load(f)
+                raw = json.load(f)
+            self._users = _validate_users(raw, self.path)
+        except UserManagerError:
+            raise
         except Exception as e:
             raise UserManagerError(f"Ошибка загрузки {self.path}: {e}")
 
