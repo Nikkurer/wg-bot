@@ -101,14 +101,15 @@ def parse_callback_suffix(data: str, prefix: str) -> str:
     return data[len(prefix) + 1 :]
 
 
-def main_menu(is_admin: bool) -> ReplyKeyboardMarkup:
+def main_menu(*, is_admin: bool, is_user: bool = True) -> ReplyKeyboardMarkup:
     """Persistent reply keyboard for registered operators."""
     rows = [
         [KeyboardButton(text=BTN_STATUS), KeyboardButton(text=BTN_CLIENTS)],
         [KeyboardButton(text=BTN_HELP)],
     ]
-    if is_admin:
+    if is_user:
         rows.append([KeyboardButton(text=BTN_ADD_CLIENT)])
+    if is_admin:
         rows.append(
             [KeyboardButton(text=BTN_DRIFT), KeyboardButton(text=BTN_OPERATORS)]
         )
@@ -116,7 +117,7 @@ def main_menu(is_admin: bool) -> ReplyKeyboardMarkup:
 
 
 def client_actions_keyboard(
-    pubkey: str, *, is_admin: bool, has_local_conf: bool = True
+    pubkey: str, *, can_manage: bool, has_local_conf: bool = True
 ) -> InlineKeyboardMarkup:
     """Inline actions for a single client row in /listclients."""
     row = [
@@ -125,7 +126,7 @@ def client_actions_keyboard(
             callback_data=build_callback_data(CB_STATS, pubkey),
         )
     ]
-    if is_admin:
+    if can_manage:
         if has_local_conf:
             row.append(
                 InlineKeyboardButton(

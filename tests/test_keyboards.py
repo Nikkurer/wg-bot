@@ -41,21 +41,21 @@ SAMPLE_PUBKEY = "A" * 43 + "="
 
 
 def test_client_actions_viewer_has_stats_only():
-    kb = client_actions_keyboard(SAMPLE_PUBKEY, is_admin=False)
+    kb = client_actions_keyboard(SAMPLE_PUBKEY, can_manage=False)
     assert len(kb.inline_keyboard) == 1
     assert len(kb.inline_keyboard[0]) == 1
     assert kb.inline_keyboard[0][0].callback_data == f"{CB_STATS}:{SAMPLE_PUBKEY}"
 
 
 def test_client_actions_admin_orphan_has_remove_only():
-    kb = client_actions_keyboard(SAMPLE_PUBKEY, is_admin=True, has_local_conf=False)
+    kb = client_actions_keyboard(SAMPLE_PUBKEY, can_manage=True, has_local_conf=False)
     assert len(kb.inline_keyboard[0]) == 2
     callbacks = [btn.callback_data for btn in kb.inline_keyboard[0]]
     assert callbacks == [f"stats:{SAMPLE_PUBKEY}", f"remove:ask:{SAMPLE_PUBKEY}"]
 
 
 def test_client_actions_admin_has_rotate_and_remove():
-    kb = client_actions_keyboard(SAMPLE_PUBKEY, is_admin=True)
+    kb = client_actions_keyboard(SAMPLE_PUBKEY, can_manage=True)
     assert len(kb.inline_keyboard[0]) == 3
     callbacks = [btn.callback_data for btn in kb.inline_keyboard[0]]
     assert callbacks == [
@@ -66,7 +66,7 @@ def test_client_actions_admin_has_rotate_and_remove():
 
 
 def test_client_callbacks_use_pubkey_not_list_index():
-    kb = client_actions_keyboard(SAMPLE_PUBKEY, is_admin=True)
+    kb = client_actions_keyboard(SAMPLE_PUBKEY, can_manage=True)
     for btn in kb.inline_keyboard[0]:
         suffix = btn.callback_data.split(":", 1)[-1]
         if btn.callback_data.startswith("stats:"):
@@ -80,7 +80,7 @@ def test_callbacks_fit_telegram_limit():
     inline_keyboards = [
         rotate_confirm_keyboard(SAMPLE_PUBKEY),
         remove_confirm_keyboard(SAMPLE_PUBKEY),
-        client_actions_keyboard(SAMPLE_PUBKEY, is_admin=True),
+        client_actions_keyboard(SAMPLE_PUBKEY, can_manage=True),
         clients_pagination_keyboard(99, 100),
         add_client_cancel_keyboard(),
         add_user_cancel_keyboard(),
@@ -145,15 +145,15 @@ def test_parse_callback_suffix_for_pubkey():
 
 
 def test_admin_main_menu_has_add_client_button():
-    kb = main_menu(is_admin=True)
+    kb = main_menu(is_admin=True, is_user=True)
     labels = {btn.text for row in kb.keyboard for btn in row}
     assert BTN_ADD_CLIENT in labels
 
 
-def test_viewer_main_menu_has_no_add_client_button():
-    kb = main_menu(is_admin=False)
+def test_viewer_main_menu_has_add_client_button():
+    kb = main_menu(is_admin=False, is_user=True)
     labels = {btn.text for row in kb.keyboard for btn in row}
-    assert BTN_ADD_CLIENT not in labels
+    assert BTN_ADD_CLIENT in labels
 
 
 def test_operator_row_superadmin_has_no_remove():

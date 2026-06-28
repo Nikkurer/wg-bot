@@ -35,6 +35,12 @@ from client_list import (
     sort_clients,
 )
 from client_manager import ClientManagerError
+from client_ownership import (
+    can_manage_client,
+    can_view_client,
+    filter_clients_for_actor,
+    format_owner_label,
+)
 from config import BotConfig, ConfigError, load_config
 from keyboards import (
     ADMIN_MENU_BUTTONS,
@@ -259,11 +265,11 @@ async def send_client_conf_and_qr(
 
 
 async def create_and_send_client(
-    message: Message, name: str, service: ClientService
+    message: Message, name: str, service: ClientService, *, actor_id: int
 ) -> None:
     """Создаёт клиента и отправляет .conf + QR."""
     try:
-        res = await service.create_client(name)
+        res = await service.create_client(name, actor_id=actor_id)
         await send_client_conf_and_qr(
             message,
             name,
@@ -351,7 +357,7 @@ async def cmd_start(message: Message, um: UserManager):
         "WireGuard management bot.\n\n"
         "Используйте кнопки меню ниже или команду /help.\n"
         "Если меню пропало — отправьте /start.",
-        reply_markup=main_menu(is_admin),
+        reply_markup=main_menu(is_admin=is_admin, is_user=True),
     )
 
 
@@ -378,7 +384,7 @@ async def handle_menu(
     elif text == BTN_HELP:
         await cmd_help(message, um)
     elif text == BTN_ADD_CLIENT:
-        if not um.is_admin(message.from_user.id):
+        if not um.is_user(message.from_user.id):
             await message.answer("Access denied.")
             return
         await prompt_add_client(message, state)
@@ -396,16 +402,19 @@ async def find_client_by_pubkey(service: ClientService, pubkey: str) -> dict | N
     return client_by_pubkey(await sorted_clients(service), pubkey)
 
 
-def format_client_card(c: dict) -> str:
+def format_client_card(c: dict, *, owner_label: str | None = None) -> str:
     label = c.get("display_name", c["name"])
     ip_display = c["ip"]
     if c.get("ip_v6"):
         ip_display = f"{c['ip']}, {c['ip_v6']}"
     local_mark = "" if c.get("has_local_conf") else " ⚠️ no local conf"
-    return (
+    text = (
         f"• {label} — {ip_display} "
         f"(pubkey: {c['pubkey'][:8]}...){local_mark}\n"
     )
+    if owner_label is not None:
+        text += f"  👤 Владелец: {owner_label}\n"
+    return text
 
 
 async def send_clients_page(
@@ -415,19 +424,25 @@ async def send_clients_page(
     page: int = 0,
 ):
     """Отправляет страницу списка клиентов с пагинацией."""
-    clients = await sorted_clients(service)
+    actor_id = message.from_user.id
+    all_clients = await sorted_clients(service)
+    clients = filter_clients_for_actor(all_clients, actor_id, um)
     if not clients:
-        await message.answer("Нет клиентов.")
+        empty = "Нет ваших клиентов." if not um.is_admin(actor_id) else "Нет клиентов."
+        await message.answer(empty)
         return
 
     page_clients, page, total_pages = paginate_clients(clients, page)
-    is_admin = um.is_admin(message.from_user.id)
+    show_owner = um.is_admin(actor_id)
 
     for c in page_clients:
+        owner_label = format_owner_label(c.get("owner"), um) if show_owner else None
         await message.answer(
-            format_client_card(c),
+            format_client_card(c, owner_label=owner_label),
             reply_markup=client_actions_keyboard(
-                c["pubkey"], is_admin=is_admin, has_local_conf=c.get("has_local_conf", True)
+                c["pubkey"],
+                can_manage=can_manage_client(actor_id, um, c),
+                has_local_conf=c.get("has_local_conf", True),
             ),
         )
 
@@ -440,11 +455,16 @@ async def send_clients_page(
         )
 
 
-async def prompt_rotate(message: Message, service: ClientService, pubkey: str):
+async def prompt_rotate(
+    message: Message, service: ClientService, pubkey: str, um: UserManager, *, actor_id: int
+):
     """Запрос подтверждения ротации ключей клиента."""
     client = await find_client_by_pubkey(service, pubkey)
     if not client:
         await message.answer("Client not found.")
+        return
+    if not can_manage_client(actor_id, um, client):
+        await message.answer("Access denied.")
         return
     name = client.get("display_name", client["name"])
     if not client.get("has_local_conf") or not client.get("storage_name"):
@@ -459,11 +479,16 @@ async def prompt_rotate(message: Message, service: ClientService, pubkey: str):
     )
 
 
-async def prompt_remove(message: Message, service: ClientService, pubkey: str):
+async def prompt_remove(
+    message: Message, service: ClientService, pubkey: str, um: UserManager, *, actor_id: int
+):
     """Запрос подтверждения удаления клиента."""
     client = await find_client_by_pubkey(service, pubkey)
     if not client:
         await message.answer("Client not found.")
+        return
+    if not can_manage_client(actor_id, um, client):
+        await message.answer("Access denied.")
         return
     name = client.get("display_name", client["name"])
     files_note = (
@@ -477,32 +502,36 @@ async def prompt_remove(message: Message, service: ClientService, pubkey: str):
     )
 
 
-async def prompt_rotate_by_name(message: Message, service: ClientService, name: str):
+async def prompt_rotate_by_name(
+    message: Message, service: ClientService, um: UserManager, name: str, *, actor_id: int
+):
     try:
         service.clients.validate_name(name)
     except ClientManagerError:
         await message.answer(f"Invalid client name: {name!r}")
         return
-    clients = await sorted_clients(service)
+    clients = filter_clients_for_actor(await sorted_clients(service), actor_id, um)
     client = client_by_name(clients, name)
     if client is None:
         await message.answer(f"Client '{name}' not found.")
         return
-    await prompt_rotate(message, service, client["pubkey"])
+    await prompt_rotate(message, service, client["pubkey"], um, actor_id=actor_id)
 
 
-async def prompt_remove_by_name(message: Message, service: ClientService, name: str):
+async def prompt_remove_by_name(
+    message: Message, service: ClientService, um: UserManager, name: str, *, actor_id: int
+):
     try:
         service.clients.validate_name(name)
     except ClientManagerError:
         await message.answer(f"Invalid client name: {name!r}")
         return
-    clients = await sorted_clients(service)
+    clients = filter_clients_for_actor(await sorted_clients(service), actor_id, um)
     client = client_by_name(clients, name)
     if client is None:
         await message.answer(f"Client '{name}' not found.")
         return
-    await prompt_remove(message, service, client["pubkey"])
+    await prompt_remove(message, service, client["pubkey"], um, actor_id=actor_id)
 
 
 async def cb_stats(callback: CallbackQuery, service: ClientService, um: UserManager):
@@ -516,6 +545,9 @@ async def cb_stats(callback: CallbackQuery, service: ClientService, um: UserMana
         client = await find_client_by_pubkey(service, pubkey)
         if not client:
             await callback.answer("Client not found.", show_alert=True)
+            return
+        if not can_view_client(callback.from_user.id, um, client):
+            await callback.answer("Access denied.", show_alert=True)
             return
         name = client.get("display_name", client["name"])
         ip_display = client["ip"]
@@ -548,14 +580,14 @@ async def cmd_help(message: Message, um: UserManager):
         f"  {BTN_STATUS} — статус WireGuard",
         f"  {BTN_CLIENTS} — список клиентов (на карточке — статистика)",
         f"  {BTN_HELP} — эта справка",
+        f"  {BTN_ADD_CLIENT} — создать нового клиента",
     ]
     if um.is_admin(message.from_user.id):
         lines += [
-            f"  {BTN_ADD_CLIENT} — создать нового клиента",
             f"  {BTN_DRIFT} — проверка drift wg-admin vs WireGuard",
             f"  {BTN_OPERATORS} — список операторов (добавить / удалить; контакт или picker)",
             "",
-            "На карточке клиента (admin): 🔄 Ротация, 🗑 Удалить",
+            "На карточке клиента (admin): 🔄 Ротация, 🗑 Удалить; у user — только свои клиенты",
             "",
             "Slash-команды (fallback):",
             "  /addclient <name> — создать клиента",
@@ -564,9 +596,19 @@ async def cmd_help(message: Message, um: UserManager):
             "  /adduser <id> <admin|user> — добавить оператора (admin — только superadmin)",
             "  /removeuser <id> — удалить оператора",
         ]
+    else:
+        lines += [
+            "",
+            "На карточке своего клиента: 🔄 Ротация, 🗑 Удалить",
+            "",
+            "Slash-команды (fallback):",
+            "  /addclient <name> — создать клиента",
+            "  /removeclient <name> — удалить своего клиента",
+            "  /rotateclient <name> — ротация ключей своего клиента",
+        ]
     lines += ["", "Если кнопки меню не видны — отправьте /start."]
     is_admin = um.is_admin(message.from_user.id)
-    await message.answer("\n".join(lines), reply_markup=main_menu(is_admin))
+    await message.answer("\n".join(lines), reply_markup=main_menu(is_admin=is_admin, is_user=True))
 
 
 async def cmd_status(
@@ -619,7 +661,7 @@ async def cmd_addclient(
         service (ClientService): Сервис управления клиентами через wg-admin.
         um (UserManager): Менеджер пользователей для проверки доступа.
     """
-    if not um.is_admin(message.from_user.id):
+    if not um.is_user(message.from_user.id):
         await message.answer("Access denied.")
         return
     if not command.args:
@@ -629,7 +671,7 @@ async def cmd_addclient(
         )
         return
     name = command.args.strip()
-    await create_and_send_client(message, name, service)
+    await create_and_send_client(message, name, service, actor_id=message.from_user.id)
 
 
 async def fsm_addclient_name(
@@ -641,7 +683,7 @@ async def fsm_addclient_name(
     um: UserManager,
 ):
     """Принимает имя клиента в диалоге добавления."""
-    if not um.is_admin(message.from_user.id):
+    if not um.is_user(message.from_user.id):
         await state.clear()
         await message.answer("Access denied.")
         return
@@ -662,14 +704,14 @@ async def fsm_addclient_name(
         return
 
     await state.clear()
-    await create_and_send_client(message, name, service)
+    await create_and_send_client(message, name, service, actor_id=message.from_user.id)
 
 
 async def cb_addclient_cancel(
     callback: CallbackQuery, state: FSMContext, um: UserManager
 ):
     """Отмена диалога добавления клиента."""
-    if not um.is_admin(callback.from_user.id):
+    if not um.is_user(callback.from_user.id):
         await callback.answer("Access denied.", show_alert=True)
         return
     await state.clear()
@@ -690,7 +732,7 @@ async def cmd_removeclient(
         service (ClientService): Сервис управления клиентами через wg-admin.
         um (UserManager): Менеджер пользователей для проверки доступа.
     """
-    if not um.is_admin(message.from_user.id):
+    if not um.is_user(message.from_user.id):
         await message.answer("Access denied.")
         return
     if not command.args:
@@ -700,7 +742,7 @@ async def cmd_removeclient(
         )
         return
     name = command.args.strip()
-    await prompt_remove_by_name(message, service, name)
+    await prompt_remove_by_name(message, service, um, name, actor_id=message.from_user.id)
 
 
 async def cmd_listclients(message: Message, service: ClientService, um: UserManager):
@@ -746,7 +788,7 @@ async def cmd_rotateclient(
     message: Message, command: CommandObject, service: ClientService, um: UserManager
 ):
     """Обработчик команды /rotateclient — запрос подтверждения."""
-    if not um.is_admin(message.from_user.id):
+    if not um.is_user(message.from_user.id):
         await message.answer("Access denied.")
         return
     if not command.args:
@@ -756,24 +798,25 @@ async def cmd_rotateclient(
         )
         return
     name = command.args.strip()
-    await prompt_rotate_by_name(message, service, name)
+    await prompt_rotate_by_name(message, service, um, name, actor_id=message.from_user.id)
 
 
 async def cb_rotate_ask(
     callback: CallbackQuery, service: ClientService, um: UserManager
 ):
     """Кнопка «Ротация» на карточке клиента — показать confirm."""
-    if not um.is_admin(callback.from_user.id):
+    if not um.is_user(callback.from_user.id):
         await callback.answer("Access denied.", show_alert=True)
         return
     pubkey = parse_callback_suffix(callback.data, CB_ROTATE_ASK)
-    await prompt_rotate(callback.message, service, pubkey)
+    await prompt_rotate(callback.message, service, pubkey, um, actor_id=callback.from_user.id)
     await callback.answer()
 
 
 async def cb_rotate(callback: CallbackQuery, service: ClientService, um: UserManager):
     """Подтверждение или отмена ротации ключей."""
-    if not um.is_admin(callback.from_user.id):
+    actor_id = callback.from_user.id
+    if not um.is_user(actor_id):
         await callback.answer("Access denied.", show_alert=True)
         return
 
@@ -791,6 +834,9 @@ async def cb_rotate(callback: CallbackQuery, service: ClientService, um: UserMan
     if not client:
         await callback.answer("Client not found.", show_alert=True)
         return
+    if not can_manage_client(actor_id, um, client):
+        await callback.answer("Access denied.", show_alert=True)
+        return
     name = client.get("display_name", client["name"])
     if not client.get("has_local_conf") or not client.get("storage_name"):
         await callback.answer(
@@ -798,7 +844,9 @@ async def cb_rotate(callback: CallbackQuery, service: ClientService, um: UserMan
         )
         return
     try:
-        res = await service.rotate_client(client["storage_name"])
+        res = await service.rotate_client(
+            client["storage_name"], actor_id=actor_id, um=um
+        )
         await callback.message.edit_text(
             f"✅ Ключи клиента '{name}' обновлены.\n"
             "⚠️ Старый .conf недействителен — используйте новый файл и QR ниже."
@@ -818,7 +866,8 @@ async def cb_rotate(callback: CallbackQuery, service: ClientService, um: UserMan
 
 async def cb_remove(callback: CallbackQuery, service: ClientService, um: UserManager):
     """Запрос, подтверждение или отмена удаления клиента."""
-    if not um.is_admin(callback.from_user.id):
+    actor_id = callback.from_user.id
+    if not um.is_user(actor_id):
         await callback.answer("Access denied.", show_alert=True)
         return
 
@@ -829,7 +878,7 @@ async def cb_remove(callback: CallbackQuery, service: ClientService, um: UserMan
 
     if callback.data.startswith(f"{CB_REMOVE_ASK}:"):
         pubkey = parse_callback_suffix(callback.data, CB_REMOVE_ASK)
-        await prompt_remove(callback.message, service, pubkey)
+        await prompt_remove(callback.message, service, pubkey, um, actor_id=actor_id)
         await callback.answer()
         return
 
@@ -842,9 +891,12 @@ async def cb_remove(callback: CallbackQuery, service: ClientService, um: UserMan
     if not client:
         await callback.answer("Client not found.", show_alert=True)
         return
+    if not can_manage_client(actor_id, um, client):
+        await callback.answer("Access denied.", show_alert=True)
+        return
     name = client.get("display_name", client["name"])
     try:
-        await service.delete_client(client)
+        await service.delete_client(client, actor_id=actor_id, um=um)
         await callback.message.edit_text(f"✅ Client '{name}' removed.")
         await callback.answer()
     except ClientServiceError as e:
@@ -982,7 +1034,7 @@ async def restore_admin_menu(
     """Восстанавливает reply-меню после диалога добавления оператора."""
     operator_id = user_id if user_id is not None else message.from_user.id
     is_admin = um.is_admin(operator_id)
-    await message.answer(text, reply_markup=main_menu(is_admin))
+    await message.answer(text, reply_markup=main_menu(is_admin=is_admin, is_user=True))
 
 
 async def prompt_remove_user(

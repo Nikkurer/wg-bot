@@ -1,5 +1,6 @@
-"""Tests for service.py."""
 import json
+import os
+import tempfile
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -7,6 +8,7 @@ import pytest
 from client_manager import ClientManager, ClientManagerError
 from config import BotConfig
 from service import ClientService, ClientServiceError
+from users import UserManager
 from wg_admin_client import PeerInfo, WgAdminClient, WgAdminError
 
 
@@ -42,6 +44,26 @@ def service(bot_config, wg_admin, client_manager):
     return ClientService(bot_config, wg_admin, client_manager=client_manager)
 
 
+ACTOR_ID = 42
+
+
+@pytest.fixture
+def temp_user_file():
+    temp_file = tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".json")
+    temp_file.write("[]")
+    temp_file.close()
+    yield temp_file.name
+    if os.path.exists(temp_file.name):
+        os.remove(temp_file.name)
+
+
+@pytest.fixture
+def um(temp_user_file):
+    manager = UserManager(temp_user_file)
+    manager.add_user(1, "admin")
+    return manager
+
+
 class TestClientService:
     @pytest.mark.asyncio
     async def test_create_client(self, service, wg_admin):
@@ -55,7 +77,7 @@ class TestClientService:
         with patch.object(
             service.clients, "generate_keypair", return_value=("priv", "pub")
         ):
-            result = await service.create_client("alice")
+            result = await service.create_client("alice", actor_id=ACTOR_ID)
 
         wg_admin.add_peer.assert_awaited_once()
         call = wg_admin.add_peer.await_args
@@ -66,6 +88,7 @@ class TestClientService:
         assert result.record.name == "alice"
         assert result.record.client_ip == "10.66.66.2/32"
         assert result.record.client_ip_v6 == "fd66:66::2/128"
+        assert result.record.owner == ACTOR_ID
         assert "PrivateKey = priv" in result.conf_text
         assert service.clients.name_exists("alice")
 
@@ -80,36 +103,39 @@ class TestClientService:
             service.clients, "save_client", side_effect=OSError("disk full")
         ):
             with pytest.raises(ClientServiceError, match="Failed to save"):
-                await service.create_client("bob")
+                await service.create_client("bob", actor_id=ACTOR_ID)
         wg_admin.remove_peer.assert_awaited_once_with("pub")
 
     @pytest.mark.asyncio
-    async def test_delete_client_rejects_invalid_name(self, service):
+    async def test_delete_client_rejects_invalid_name(self, service, um):
         with pytest.raises(ClientManagerError, match="Invalid"):
             await service.delete_client(
                 {
                     "pubkey": "pub",
                     "storage_name": "../state/users",
                     "has_local_conf": True,
-                }
+                    "owner": 1,
+                },
+                actor_id=1,
+                um=um,
             )
 
     @pytest.mark.asyncio
-    async def test_delete_client(self, service, wg_admin):
+    async def test_delete_client(self, service, wg_admin, um):
         wg_admin.list_peers.return_value = [
             PeerInfo(public_key="pub", allowed_ips=["10.66.66.2/32"], description="carol")
         ]
         with patch.object(
             service.clients, "generate_keypair", return_value=("priv", "pub")
         ):
-            await service.create_client("carol")
+            await service.create_client("carol", actor_id=1)
         items = await service.list_clients_merged()
-        await service.delete_client(items[0])
+        await service.delete_client(items[0], actor_id=1, um=um)
         wg_admin.remove_peer.assert_awaited_with("pub")
         assert not service.clients.name_exists("carol")
 
     @pytest.mark.asyncio
-    async def test_delete_orphan_peer_without_local_files(self, service, wg_admin):
+    async def test_delete_orphan_peer_without_local_files(self, service, wg_admin, um):
         wg_admin.list_peers.return_value = [
             PeerInfo(
                 public_key="orphanpub",
@@ -118,23 +144,23 @@ class TestClientService:
             )
         ]
         items = await service.list_clients_merged()
-        await service.delete_client(items[0])
+        await service.delete_client(items[0], actor_id=1, um=um)
         wg_admin.remove_peer.assert_awaited_once_with("orphanpub")
 
     @pytest.mark.asyncio
-    async def test_rotate_client(self, service, wg_admin):
+    async def test_rotate_client(self, service, wg_admin, um):
         wg_admin.list_peers.return_value = [
             PeerInfo(public_key="pub1", allowed_ips=["10.66.66.2/32"], description="dave")
         ]
         with patch.object(
             service.clients, "generate_keypair", side_effect=[("priv1", "pub1"), ("priv2", "pub2")]
         ):
-            await service.create_client("dave")
+            await service.create_client("dave", actor_id=1)
         wg_admin.rotate_peer.reset_mock()
         with patch.object(
             service.clients, "generate_keypair", return_value=("priv2", "pub2")
         ):
-            result = await service.rotate_client("dave")
+            result = await service.rotate_client("dave", actor_id=1, um=um)
         wg_admin.rotate_peer.assert_awaited_once_with("pub1", "pub2")
         assert result.record.pubkey == "pub2"
         assert "priv2" in result.conf_text
@@ -170,12 +196,13 @@ class TestClientService:
         with patch.object(
             service.clients, "generate_keypair", return_value=("priv", "pub")
         ):
-            await service.create_client("eve")
+            await service.create_client("eve", actor_id=ACTOR_ID)
         items = await service.list_clients_merged()
         assert len(items) == 1
         assert items[0]["name"] == "eve"
         assert items[0]["display_name"] == "eve"
         assert items[0]["storage_name"] == "eve"
+        assert items[0]["owner"] == ACTOR_ID
         assert items[0]["transfer_rx"] == 100
 
     @pytest.mark.asyncio
@@ -185,4 +212,4 @@ class TestClientService:
             service.clients, "generate_keypair", return_value=("priv", "pub")
         ):
             with pytest.raises(ClientServiceError, match="Failed to add peer"):
-                await service.create_client("fail")
+                await service.create_client("fail", actor_id=ACTOR_ID)

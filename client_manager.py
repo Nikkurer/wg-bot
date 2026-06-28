@@ -30,6 +30,7 @@ class ClientRecord:
     conf_path: str
     client_ip_v6: Optional[str] = None
     created_at: Optional[str] = None
+    owner: Optional[int] = None
 
 
 class ClientManager:
@@ -160,7 +161,14 @@ class ClientManager:
         return "\n".join(lines)
 
     def save_client(
-        self, name: str, pubkey: str, client_ip: str, conf_text: str, client_ip_v6: Optional[str] = None
+        self,
+        name: str,
+        pubkey: str,
+        client_ip: str,
+        conf_text: str,
+        client_ip_v6: Optional[str] = None,
+        *,
+        owner: int,
     ) -> ClientRecord:
         self.validate_name(name)
         if self.name_exists(name):
@@ -176,6 +184,7 @@ class ClientManager:
             "pubkey": pubkey,
             "conf_path": conf_path,
             "created_at": created_at,
+            "owner": owner,
         }
         if client_ip_v6:
             meta["client_ip_v6"] = client_ip_v6
@@ -190,6 +199,7 @@ class ClientManager:
             conf_path=conf_path,
             client_ip_v6=client_ip_v6,
             created_at=created_at,
+            owner=owner,
         )
 
     def load_client(self, name: str) -> ClientRecord:
@@ -203,6 +213,9 @@ class ClientManager:
         if meta_name != name:
             self.validate_name(meta_name)
         conf_path = self._conf_path(name)
+        owner = meta.get("owner")
+        if owner is not None:
+            owner = int(owner)
         return ClientRecord(
             name=name,
             pubkey=meta.get("pubkey", ""),
@@ -210,6 +223,7 @@ class ClientManager:
             conf_path=conf_path,
             client_ip_v6=meta.get("client_ip_v6"),
             created_at=meta.get("created_at"),
+            owner=owner,
         )
 
     def read_conf(self, name: str) -> str:
@@ -236,6 +250,7 @@ class ClientManager:
             conf_path=conf_path,
             client_ip_v6=record.client_ip_v6,
             created_at=record.created_at,
+            owner=record.owner,
         )
 
     def remove_client_files(self, name: str) -> None:

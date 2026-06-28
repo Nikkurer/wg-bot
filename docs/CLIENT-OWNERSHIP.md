@@ -1,6 +1,6 @@
 # Client ownership — проектирование
 
-**Статус:** draft, без реализации  
+**Статус:** реализовано на ветке `feat/client-ownership` (2026-06)
 **Контекст:** сейчас роль `user` видит всех клиентов, но не может ими управлять. Роль `admin` управляет **всем** пулом. Нет привязки «клиент → оператор».
 
 ---
@@ -19,7 +19,7 @@
 | Создать / rotate / delete | ❌ | все | все |
 | Drift, операторы | ❌ | ✅ / частично | ✅ |
 
-Ownership **нигде не хранится**: в `{name}.json` есть `name`, `pubkey`, `client_ip`, `created_at`, но нет `created_by`.
+Ownership **нигде не хранится**: в `{name}.json` есть `name`, `pubkey`, `client_ip`, `created_at`, но нет `owner`.
 
 ---
 
@@ -33,7 +33,7 @@ Ownership **нигде не хранится**: в `{name}.json` есть `name`
 {
   "name": "alice",
   "pubkey": "...",
-  "created_by": 123456789,
+  "owner": 123456789,
   "created_at": "..."
 }
 ```
@@ -44,10 +44,10 @@ Ownership **нигде не хранится**: в `{name}.json` есть `name`
 |------|---------|
 | `superadmin` | любой клиент |
 | `admin` | любой клиент (или только свои — см. вопросы) |
-| `user` | только `created_by == actor_id` |
+| `user` | только `owner == actor_id` |
 
 **Плюсы:** минимальные изменения, не зависит от wg-admin.  
-**Минусы:** orphan peer (нет local `.json`) — owner неизвестен; старые клиенты без `created_by`.
+**Минусы:** orphan peer (нет local `.json`) — owner неизвестен; старые клиенты без `owner`.
 
 ### B. Owner в wg-admin `peer.description`
 
@@ -66,40 +66,78 @@ Ownership **нигде не хранится**: в `{name}.json` есть `name`
 
 ---
 
+## Принятые решения
+
+| # | Вопрос | Решение |
+|---|--------|---------|
+| 1 | Видимость для `user` | **Только свои** клиенты (`owner == actor`) |
+| 2 | Видимость для `admin` | **Все** клиенты + **подпись владельца** на карточке |
+| 3 | Legacy без `owner` | **Навсегда admin-only** (manage + видны admin/superadmin с меткой «без владельца») |
+| 4 | Orphan peer (нет local conf) | **Admin-only** (user не видит; manage как сейчас) |
+
+Дополнительно (по умолчанию для v1, если не оспорено):
+
+- `superadmin` — как `admin` (видит всех + владелец), manage любой клиент
+- `admin` manage — **все** клиенты (не только свои)
+- `user` manage — create / rotate / delete **только своих**
+- `user` получает **➕ Клиент** в reply-меню
+- Флаг `ADMIN_MANAGES_ALL` **не нужен** в v1
+
+---
+
 ## Рекомендация: A + правила для legacy/orphan
 
 ### `can_manage_client(actor, client) -> bool`
 
 ```text
 superadmin                          → true
-admin + policy "admin_sees_all"     → true   # default ON для обратной совместимости
-admin + policy "admin_own_only"     → created_by == actor
-user                                → created_by == actor
-client without created_by (legacy)  → admin/superadmin only
-orphan (no local conf)              → admin/superadmin only (как сейчас)
+admin                               → true (любой клиент с local conf или orphan)
+user                                → owner == actor
+client without owner (legacy)  → admin/superadmin only
+orphan (no local conf)              → admin/superadmin only
 ```
 
 ### `can_view_client(actor, client) -> bool`
 
-**Вариант 1 (проще):** `user` по-прежнему видит **всех** в списке, но кнопки manage только на своих.  
-**Вариант 2 (строже):** `user` видит в списке **только своих** (+ опционально stats по всем для support).
-
-Нужно выбрать (см. вопросы ниже).
+```text
+superadmin / admin                  → true (все, включая legacy и orphan)
+user                                → has_local_conf and owner == actor
+```
 
 ---
 
-## Изменения по слоям (когда будем делать)
+## Отображение владельца (admin / superadmin)
+
+На карточке клиента дополнительная строка, например:
+
+```text
+• alice — 10.66.66.2/32 (pubkey: abcd1234...)
+  👤 Владелец: Ivan Petrov (@ivan)
+```
+
+| `owner` | Подпись |
+|--------------|---------|
+| известный оператор | имя / @username (как в списке операторов) |
+| ID не в `users.json` | `ID 123456789 <deleted>` |
+| `null` (legacy) | `без владельца (legacy)` |
+| orphan | `—` или не показывать (нет local meta) |
+
+---
+
+## Изменения по слоям
+
+Реализовано в `client_ownership.py`, `client_manager.py`, `service.py`, `main.py`, `keyboards.py`.
 
 ### `client_manager.py`
 
-- `save_client(..., created_by: int)`
-- `load_client` → поле `created_by` (optional)
+- `save_client(..., owner: int)`
+- `load_client` → поле `owner` (optional)
 - helper `client_owned_by(record, operator_id)`
 
 ### `service.py`
 
-- `create_client(name, *, actor_id)` — прокидывает `created_by`
-- `list_clients_merged()` — добавляет `created_by` в dict (из meta; для orphan `None`)
+- `create_client(name, *, actor_id)` — прокидывает `owner`
+- `list_clients_merged()` — добавляет `owner` в dict (из meta; для orphan `None`)
 - `delete_client` / `rotate_client` — проверка через `can_manage_client`
 
 ### `main.py`
@@ -111,16 +149,14 @@ orphan (no local conf)              → admin/superadmin only (как сейча
 
 ### `users.py` / config
 
-- Опционально: флаг `ADMIN_MANAGES_ALL_CLIENTS=true` (default true)
-- Без флага admin ограничен своими клиентами (редкий режим)
+- Без доп. флагов в v1
 
 ### Миграция
 
 | Категория | Поведение |
 |-----------|-----------|
-| Существующие `.json` без `created_by` | `created_by = null` → manage только admin/superadmin; view — по политике |
-| Одноразовая команда `/claim` или скрипт | superadmin проставляет owner для legacy (optional) |
-| Orphan peer | без изменений: delete через admin по pubkey, owner не назначается |
+| Существующие `.json` без `owner` | admin-only manage; admin видит с меткой «legacy»; user не видит |
+| Orphan peer | admin-only; user не видит |
 
 ---
 
@@ -141,7 +177,7 @@ orphan (no local conf)              → admin/superadmin only (как сейча
 ## Безопасность
 
 - Проверка **на сервере** при confirm (не только скрытие кнопок)
-- `created_by` в meta — не доверять для проверки без загрузки meta по `storage_name` (уже есть pubkey lookup)
+- `owner` в meta — не доверять для проверки без загрузки meta по `storage_name` (уже есть pubkey lookup)
 - Audit log (TODO #11): `{actor, action, client, pubkey}` — особенно важен при shared admin pool
 
 ---
@@ -150,34 +186,40 @@ orphan (no local conf)              → admin/superadmin only (как сейча
 
 | PR | Содержание |
 |----|------------|
-| PR1 | `created_by` в meta + `create_client(actor_id)` + тесты |
+| PR1 | `owner` в meta + `create_client(actor_id)` + тесты |
 | PR2 | `can_manage_client` + guards на rotate/delete + UI кнопки |
-| PR3 | Меню ➕ Клиент для `user` + фильтр списка (если strict) |
-| PR4 | Legacy migration / документация / config flag |
+| PR3 | ➕ Клиент для `user`, фильтр списка, подпись владельца для admin |
+| PR4 | README, help, документация |
 
 ---
 
-## Открытые вопросы (нужно решить до реализации)
+## Остаётся уточнить (перед PR1)
 
-1. **`user` видит чужих клиенты в списке или только своих?**  
-   - Только свои — проще mentally, меньше утечки имён/IP.  
-   - Все — удобнее для «я вижу что на сервере, но трогать могу только своё».
+### A. Кто владелец при создании admin'ом?
 
-2. **`admin` управляет всеми клиентами или только своими?**  
-   - Default: **всеми** (как сейчас), иначе ломается текущий ops-workflow.  
-   - Restricted admin — отдельный режим через config.
+**Предложение по умолчанию:** `owner` = Telegram ID того, кто нажал «создать».
 
-3. **Кто может создавать клиентов после фичи?**  
-   - `user` + admin + superadmin (ожидаемо)  
-   - или user только если admin явно выдал quota (overkill для v1)?
+- Admin создал → клиент **принадлежит admin'у**, user его **не видит**
+- «Создать клиента **для** user X» — отдельная фича, **не в v1**
 
-4. **Legacy-клиенты без `created_by`:**  
-   - навсегда admin-only manage  
-   - или разовый claim/migration superadmin'ом?
+### B. Лимит клиентов на одного `user`?
 
-5. **Orphan peer с чужим description:**  
-   - оставить admin-only (рекомендуется)  
-   - или позволить user «adopt» orphan (сложно, рискованно)?
+**Предложение:** без лимита в v1. Config `MAX_CLIENTS_PER_USER` — при необходимости позже.
+
+### C. `/status` для `user`
+
+**Предложение:** без изменений — общий статус WireGuard. Не раскрывает чужие имена/IP. Скрывать aggregate stats для user — только если попросите отдельно.
+
+---
+
+## Закрытые вопросы
+
+1. user видит только своих → **да**
+2. admin видит всех + владелец на карточке → **да**
+3. legacy admin-only навсегда → **да**
+4. orphan admin-only → **да**
+5. user может создавать (➕ Клиент) → **да**
+6. admin manage всех → **да**
 
 ---
 

@@ -7,7 +7,9 @@ from dataclasses import dataclass
 from typing import List, Optional
 
 from client_manager import ClientManager, ClientManagerError, ClientRecord
+from client_ownership import can_manage_client
 from config import BotConfig
+from users import UserManager
 from wg_admin_client import PeerInfo, WgAdminClient, WgAdminError
 
 
@@ -36,7 +38,7 @@ class ClientService:
         self.clients = client_manager or ClientManager(cfg)
         self.logger = logger or logging.getLogger("client_service")
 
-    async def create_client(self, name: str) -> CreateClientResult:
+    async def create_client(self, name: str, *, actor_id: int) -> CreateClientResult:
         self.clients.validate_name(name)
         if self.clients.name_exists(name):
             raise ClientServiceError("Client with that name already exists")
@@ -65,7 +67,7 @@ class ClientService:
 
             conf_text = self.clients.build_client_conf(priv, client_ip, client_ip_v6)
             record = self.clients.save_client(
-                name, pub, client_ip, conf_text, client_ip_v6=client_ip_v6
+                name, pub, client_ip, conf_text, client_ip_v6=client_ip_v6, owner=actor_id
             )
         except Exception as e:
             self.logger.error("Failed to save client files for %s, rolling back peer", name)
@@ -80,7 +82,11 @@ class ClientService:
         self.logger.info("Created client %s with IP %s", name, client_ip)
         return CreateClientResult(record=record, conf_text=conf_text)
 
-    async def delete_client(self, client: dict) -> None:
+    async def delete_client(
+        self, client: dict, *, actor_id: int, um: UserManager
+    ) -> None:
+        if not can_manage_client(actor_id, um, client):
+            raise ClientServiceError("Access denied")
         pubkey = client["pubkey"]
         storage_name = client.get("storage_name")
         if storage_name:
@@ -102,9 +108,18 @@ class ClientService:
             storage_name or client.get("display_name", pubkey[:8]),
         )
 
-    async def rotate_client(self, storage_name: str) -> CreateClientResult:
+    async def rotate_client(
+        self, storage_name: str, *, actor_id: int, um: UserManager
+    ) -> CreateClientResult:
         self.clients.validate_name(storage_name)
         record = self.clients.load_client(storage_name)
+        client = {
+            "storage_name": storage_name,
+            "has_local_conf": True,
+            "owner": record.owner,
+        }
+        if not can_manage_client(actor_id, um, client):
+            raise ClientServiceError("Access denied")
         old_pub = record.pubkey
         priv, new_pub = self.clients.generate_keypair()
 
@@ -195,4 +210,5 @@ def _merge_client(local: Optional[ClientRecord], peer: Optional[PeerInfo]) -> di
         "transfer_rx": peer.transfer_rx if peer else 0,
         "transfer_tx": peer.transfer_tx if peer else 0,
         "has_local_conf": has_local_conf,
+        "owner": local.owner if local else None,
     }
