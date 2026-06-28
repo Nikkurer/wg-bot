@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from typing import List, Optional, Tuple
 
 from config import BotConfig
+from messages import CLIENT_ALREADY_EXISTS, CLIENT_NOT_FOUND, INVALID_CLIENT_NAME
 
 NAME_PATTERN = re.compile(r"^[a-z0-9_-]+$")
 
@@ -68,7 +69,7 @@ class ClientManager:
     @staticmethod
     def validate_name(name: str) -> None:
         if not name or not NAME_PATTERN.match(name.lower()):
-            raise ClientManagerError("Invalid client name")
+            raise ClientManagerError(INVALID_CLIENT_NAME)
 
     def name_exists(self, name: str) -> bool:
         self.validate_name(name)
@@ -172,7 +173,7 @@ class ClientManager:
     ) -> ClientRecord:
         self.validate_name(name)
         if self.name_exists(name):
-            raise ClientManagerError("Client with that name already exists")
+            raise ClientManagerError(CLIENT_ALREADY_EXISTS)
 
         conf_path = self._conf_path(name)
         meta_path = self._meta_path(name)
@@ -206,7 +207,7 @@ class ClientManager:
         self.validate_name(name)
         meta_path = self._meta_path(name)
         if not os.path.exists(meta_path):
-            raise ClientManagerError("Client not found")
+            raise ClientManagerError(CLIENT_NOT_FOUND)
         with open(meta_path, "r", encoding="utf-8") as f:
             meta = json.load(f)
         meta_name = meta.get("name", name)

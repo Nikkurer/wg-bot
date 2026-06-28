@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from client_manager import ClientManager, ClientManagerError
+from messages import INVALID_CLIENT_NAME
 from config import BotConfig
 from service import ClientService, ClientServiceError
 from users import UserManager
@@ -108,7 +109,7 @@ class TestClientService:
 
     @pytest.mark.asyncio
     async def test_delete_client_rejects_invalid_name(self, service, um):
-        with pytest.raises(ClientManagerError, match="Invalid"):
+        with pytest.raises(ClientManagerError, match=INVALID_CLIENT_NAME):
             await service.delete_client(
                 {
                     "pubkey": "pub",

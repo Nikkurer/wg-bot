@@ -42,6 +42,12 @@ from client_ownership import (
     format_owner_label,
 )
 from config import BotConfig, ConfigError, load_config
+from error_messages import (
+    GENERIC_CALLBACK_ALERT,
+    GENERIC_ERROR,
+    format_drift_error,
+    user_facing_error,
+)
 from keyboards import (
     ADMIN_MENU_BUTTONS,
     BTN_ADD_CLIENT,
@@ -280,10 +286,10 @@ async def create_and_send_client(
         )
     except ClientServiceError as e:
         infoLog.error("ClientServiceError: %s", e)
-        await message.answer("Ошибка при добавлении клиента.")
-    except Exception as e:
+        await message.answer(user_facing_error(e))
+    except Exception:
         infoLog.error("Unexpected error: %s", traceback.format_exc())
-        await message.answer(f"Unexpected error: {e}")
+        await message.answer(GENERIC_ERROR)
 
 
 async def prompt_add_client(message: Message, state: FSMContext):
@@ -565,9 +571,11 @@ async def cb_stats(callback: CallbackQuery, service: ClientService, um: UserMana
         await callback.message.answer(text)
         await callback.answer()
     except ClientServiceError as e:
-        await callback.answer(f"Ошибка: {e}", show_alert=True)
-    except Exception as e:
-        await callback.answer(f"Ошибка: {e}", show_alert=True)
+        infoLog.error("Stats failed: %s", e)
+        await callback.answer(user_facing_error(e), show_alert=True)
+    except Exception:
+        infoLog.error("Stats failed: %s", traceback.format_exc())
+        await callback.answer(GENERIC_CALLBACK_ALERT, show_alert=True)
 
 
 async def cmd_help(message: Message, um: UserManager):
@@ -760,7 +768,8 @@ async def cmd_listclients(message: Message, service: ClientService, um: UserMana
     try:
         await send_clients_page(message, service, um, page=0)
     except ClientServiceError as e:
-        await message.answer(f"Failed: {e}")
+        infoLog.error("List clients failed: %s", e)
+        await message.answer(user_facing_error(e))
 
 
 async def cb_clients_page(
@@ -775,7 +784,8 @@ async def cb_clients_page(
         await send_clients_page(callback.message, service, um, page=page)
         await callback.answer()
     except ClientServiceError as e:
-        await callback.answer(str(e), show_alert=True)
+        infoLog.error("Clients page failed: %s", e)
+        await callback.answer(user_facing_error(e), show_alert=True)
 
 
 async def cmd_drift(message: Message, wg_admin: WgAdminClient, um: UserManager):
@@ -788,7 +798,7 @@ async def cmd_drift(message: Message, wg_admin: WgAdminClient, um: UserManager):
         await message.answer(format_drift_report(report))
     except WgAdminError as e:
         infoLog.error("Drift check failed: %s", e)
-        await message.answer(f"❌ Ошибка drift check: {e}")
+        await message.answer(format_drift_error(e))
 
 
 async def cmd_rotateclient(
@@ -868,7 +878,7 @@ async def cb_rotate(callback: CallbackQuery, service: ClientService, um: UserMan
         await callback.answer()
     except ClientServiceError as e:
         infoLog.error("Rotate failed for %s: %s", name, e)
-        await callback.answer(str(e), show_alert=True)
+        await callback.answer(user_facing_error(e), show_alert=True)
 
 
 async def cb_remove(callback: CallbackQuery, service: ClientService, um: UserManager):
@@ -908,10 +918,10 @@ async def cb_remove(callback: CallbackQuery, service: ClientService, um: UserMan
         await callback.answer()
     except ClientServiceError as e:
         infoLog.error("Remove failed for %s: %s", name, e)
-        await callback.answer(str(e), show_alert=True)
-    except Exception as e:
+        await callback.answer(user_facing_error(e), show_alert=True)
+    except Exception:
         infoLog.error("Remove failed for %s: %s", name, traceback.format_exc())
-        await callback.answer(f"Ошибка: {e}", show_alert=True)
+        await callback.answer(GENERIC_CALLBACK_ALERT, show_alert=True)
 
 
 # --- user management handlers ---
@@ -1105,12 +1115,24 @@ async def cmd_adduser(message: Message, command: CommandObject, um: UserManager)
             f"Или откройте {BTN_OPERATORS} и нажмите ➕ Добавить оператора."
         )
         return
+    parts = command.args.split(maxsplit=1)
+    if len(parts) != 2:
+        await message.answer(
+            "Usage: /adduser <id> <role>\n"
+            f"Или откройте {BTN_OPERATORS} и нажмите ➕ Добавить оператора."
+        )
+        return
+    user_id_str, role = parts
     try:
-        user_id_str, role = command.args.split(maxsplit=1)
-        await do_add_user(message.bot, um, int(user_id_str), role, message.from_user.id)
+        await do_add_user(
+            message.bot, um, int(user_id_str), role, message.from_user.id
+        )
         await message.answer(f"✅ Пользователь {user_id_str} добавлен с ролью {role}.")
+    except ValueError:
+        await message.answer("❌ Ошибка: ID должен быть числом.")
     except Exception as e:
-        await message.answer(f"❌ Ошибка: {e}")
+        infoLog.error("adduser failed: %s", e)
+        await message.answer(f"❌ {user_facing_error(e)}")
 
 
 async def fsm_adduser_id(
@@ -1295,7 +1317,8 @@ async def cb_useradd(callback: CallbackQuery, state: FSMContext, um: UserManager
                 user_id=callback.from_user.id,
             )
         except Exception as e:
-            await callback.message.edit_text(f"❌ Ошибка: {e}")
+            infoLog.error("add operator failed: %s", e)
+            await callback.message.edit_text(f"❌ {user_facing_error(e)}")
         await callback.answer()
         return
 
@@ -1335,7 +1358,8 @@ async def cb_userremove(callback: CallbackQuery, um: UserManager):
         await callback.message.edit_text(f"✅ Оператор {label} удалён.")
         await callback.answer()
     except Exception as e:
-        await callback.message.edit_text(f"❌ Ошибка: {e}")
+        infoLog.error("remove operator failed: %s", e)
+        await callback.message.edit_text(f"❌ {user_facing_error(e)}")
         await callback.answer()
 
 

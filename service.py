@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import List, Optional
 
 from client_manager import ClientManager, ClientManagerError, ClientRecord
+from messages import ACCESS_DENIED, CLIENT_ALREADY_EXISTS, ROTATE_MANUAL_REISSUE
 from client_ownership import can_manage_client
 from config import BotConfig
 from users import UserManager
@@ -41,7 +42,7 @@ class ClientService:
     async def create_client(self, name: str, *, actor_id: int) -> CreateClientResult:
         self.clients.validate_name(name)
         if self.clients.name_exists(name):
-            raise ClientServiceError("Client with that name already exists")
+            raise ClientServiceError(CLIENT_ALREADY_EXISTS)
 
         priv, pub = self.clients.generate_keypair()
 
@@ -86,7 +87,7 @@ class ClientService:
         self, client: dict, *, actor_id: int, um: UserManager
     ) -> None:
         if not can_manage_client(actor_id, um, client):
-            raise ClientServiceError("Access denied")
+            raise ClientServiceError(ACCESS_DENIED)
         pubkey = client["pubkey"]
         storage_name = client.get("storage_name")
         if storage_name:
@@ -119,7 +120,7 @@ class ClientService:
             "owner": record.owner,
         }
         if not can_manage_client(actor_id, um, client):
-            raise ClientServiceError("Access denied")
+            raise ClientServiceError(ACCESS_DENIED)
         old_pub = record.pubkey
         priv, new_pub = self.clients.generate_keypair()
 
@@ -140,9 +141,7 @@ class ClientService:
                 new_pub[:8],
                 e,
             )
-            raise ClientServiceError(
-                f"Peer rotated on server but failed to save new conf — manual reissue required"
-            ) from e
+            raise ClientServiceError(ROTATE_MANUAL_REISSUE) from e
 
         self.logger.info("Rotated keys for client %s", storage_name)
         return CreateClientResult(record=updated, conf_text=conf_text)

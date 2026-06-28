@@ -7,6 +7,7 @@ import pytest
 
 from client_manager import ClientManager, ClientManagerError
 from config import BotConfig
+from messages import INVALID_CLIENT_NAME
 
 
 @pytest.fixture
@@ -33,7 +34,7 @@ def manager(bot_config):
 class TestClientManager:
     def test_validate_name(self, manager):
         manager.validate_name("alice-1")
-        with pytest.raises(ClientManagerError, match="Invalid"):
+        with pytest.raises(ClientManagerError, match=INVALID_CLIENT_NAME):
             manager.validate_name("bad name")
 
     def test_generate_keypair(self, manager):
@@ -94,11 +95,11 @@ class TestClientManager:
         assert not manager.name_exists("bob")
 
     def test_load_client_rejects_path_traversal_name(self, manager):
-        with pytest.raises(ClientManagerError, match="Invalid"):
+        with pytest.raises(ClientManagerError, match=INVALID_CLIENT_NAME):
             manager.load_client("../state/users")
 
     def test_remove_client_files_rejects_path_traversal_name(self, manager):
-        with pytest.raises(ClientManagerError, match="Invalid"):
+        with pytest.raises(ClientManagerError, match=INVALID_CLIENT_NAME):
             manager.remove_client_files("../state/users")
 
     def test_load_client_ignores_conf_path_from_meta(self, manager, bot_config):
@@ -122,7 +123,7 @@ class TestClientManager:
         assert names == ["good"]
 
     def test_safe_client_path_rejects_traversal(self, manager):
-        with pytest.raises(ClientManagerError, match="Invalid"):
+        with pytest.raises(ClientManagerError, match=INVALID_CLIENT_NAME):
             manager._safe_client_path("../state/users", ".json")
 
     def test_atomic_write_rejects_path_outside_client_dir(self, manager, tmp_path):
