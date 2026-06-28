@@ -22,10 +22,14 @@ from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     KeyboardButton,
+    KeyboardButtonRequestUsers,
     ReplyKeyboardMarkup,
 )
 
+from operator_add import ADD_USER_REQUEST_ID
+
 # --- Reply menu labels ---
+BTN_PICK_USER = "👤 Выбрать пользователя"
 BTN_STATUS = "📊 Статус"
 BTN_CLIENTS = "👥 Клиенты"
 BTN_HELP = "❓ Справка"
@@ -201,6 +205,26 @@ def add_user_cancel_keyboard() -> InlineKeyboardMarkup:
                 )
             ]
         ]
+    )
+
+
+def add_user_pick_keyboard() -> ReplyKeyboardMarkup:
+    """Reply keyboard with Telegram user picker (Bot API request_users)."""
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [
+                KeyboardButton(
+                    text=BTN_PICK_USER,
+                    request_users=KeyboardButtonRequestUsers(
+                        request_id=ADD_USER_REQUEST_ID,
+                        user_is_bot=False,
+                        max_quantity=1,
+                    ),
+                )
+            ]
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=True,
     )
 
 

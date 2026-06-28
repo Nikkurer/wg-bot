@@ -24,6 +24,7 @@ from aiogram.types import (
     CallbackQuery,
     FSInputFile,
     Message,
+    ReplyKeyboardRemove,
 )
 from bootstrap import enrich_from_wg_admin
 from client_list import (
@@ -59,6 +60,7 @@ from keyboards import (
     CB_USER_REMOVE_CONFIRM,
     add_client_cancel_keyboard,
     add_user_cancel_keyboard,
+    add_user_pick_keyboard,
     add_user_role_keyboard,
     client_actions_keyboard,
     clients_pagination_keyboard,
@@ -70,6 +72,7 @@ from keyboards import (
     remove_confirm_keyboard,
     rotate_confirm_keyboard,
 )
+from operator_add import ADD_USER_REQUEST_ID, contact_user_id_or_error, format_person_name
 from service import ClientService, ClientServiceError
 from states import AddClientStates, AddUserStates
 from users import UserManager
@@ -517,7 +520,7 @@ async def cmd_help(message: Message, um: UserManager):
         lines += [
             f"  {BTN_ADD_CLIENT} — создать нового клиента",
             f"  {BTN_DRIFT} — проверка drift wg-admin vs WireGuard",
-            f"  {BTN_OPERATORS} — список операторов (добавить / удалить)",
+            f"  {BTN_OPERATORS} — список операторов (добавить / удалить; контакт или picker)",
             "",
             "На карточке клиента (admin): 🔄 Ротация, 🗑 Удалить",
             "",
@@ -525,7 +528,7 @@ async def cmd_help(message: Message, um: UserManager):
             "  /addclient <name> — создать клиента",
             "  /removeclient <name> — удалить клиента",
             "  /rotateclient <name> — ротация ключей",
-            "  /adduser <id> <admin|user> — добавить оператора",
+            "  /adduser <id> <admin|user> — добавить оператора (или контакт / picker)",
             "  /removeuser <id> — удалить оператора",
         ]
     lines += ["", "Если кнопки меню не видны — отправьте /start."]
@@ -834,10 +837,35 @@ async def prompt_add_user(message: Message, state: FSMContext):
     """Запускает диалог добавления оператора (FSM)."""
     await state.set_state(AddUserStates.waiting_for_id)
     await message.answer(
-        "Введите Telegram ID нового оператора.\n"
-        "ID можно узнать у @userinfobot или из пересланного сообщения.",
+        "Добавление оператора — выберите способ:\n"
+        "• нажмите «👤 Выбрать пользователя»\n"
+        "• или 📎 → Контакт → выберите человека\n"
+        "• или введите числовой Telegram ID",
         reply_markup=add_user_cancel_keyboard(),
     )
+    await message.answer(
+        "Выбор из Telegram:",
+        reply_markup=add_user_pick_keyboard(),
+    )
+
+
+async def prompt_add_user_role(
+    message: Message, state: FSMContext, user_id: int, display: str | None = None
+):
+    """Снимает picker-клавиатуру и предлагает выбрать роль."""
+    await state.clear()
+    label = f"{display} ({user_id})" if display else str(user_id)
+    await message.answer("Пользователь выбран.", reply_markup=ReplyKeyboardRemove())
+    await message.answer(
+        f"Выберите роль для оператора {label}:",
+        reply_markup=add_user_role_keyboard(user_id),
+    )
+
+
+async def restore_admin_menu(message: Message, um: UserManager, text: str):
+    """Восстанавливает reply-меню после диалога добавления оператора."""
+    is_admin = um.is_admin(message.from_user.id)
+    await message.answer(text, reply_markup=main_menu(is_admin))
 
 
 async def prompt_remove_user(message: Message, user_id: int):
@@ -926,11 +954,67 @@ async def fsm_adduser_id(
         return
 
     user_id = int(text)
-    await state.clear()
-    await message.answer(
-        f"Выберите роль для оператора {user_id}:",
-        reply_markup=add_user_role_keyboard(user_id),
+    await prompt_add_user_role(message, state, user_id)
+
+
+async def fsm_adduser_contact(
+    message: Message,
+    state: FSMContext,
+    wg_admin: WgAdminClient,
+    cfg: BotConfig,
+    service: ClientService,
+    um: UserManager,
+):
+    """Принимает контакт в диалоге добавления оператора."""
+    if not um.is_admin(message.from_user.id):
+        await state.clear()
+        await message.answer("Access denied.")
+        return
+
+    user_id, error = contact_user_id_or_error(message.contact.user_id)
+    if error:
+        await message.answer(
+            f"{error}\nПопробуйте другой способ или нажмите ❌ Отмена."
+        )
+        return
+
+    display = format_person_name(
+        first_name=message.contact.first_name,
+        last_name=message.contact.last_name,
+        user_id=user_id,
     )
+    await prompt_add_user_role(message, state, user_id, display)
+
+
+async def fsm_adduser_shared(
+    message: Message,
+    state: FSMContext,
+    wg_admin: WgAdminClient,
+    cfg: BotConfig,
+    service: ClientService,
+    um: UserManager,
+):
+    """Принимает пользователя из Telegram user picker (request_users)."""
+    if not um.is_admin(message.from_user.id):
+        await state.clear()
+        await message.answer("Access denied.")
+        return
+
+    shared = message.users_shared
+    if not shared or shared.request_id != ADD_USER_REQUEST_ID:
+        return
+    if not shared.users:
+        await message.answer("Пользователь не выбран. Попробуйте ещё раз.")
+        return
+
+    user = shared.users[0]
+    display = format_person_name(
+        first_name=user.first_name,
+        last_name=user.last_name,
+        username=user.username,
+        user_id=user.user_id,
+    )
+    await prompt_add_user_role(message, state, user.user_id, display)
 
 
 async def cb_useradd(callback: CallbackQuery, state: FSMContext, um: UserManager):
@@ -942,6 +1026,9 @@ async def cb_useradd(callback: CallbackQuery, state: FSMContext, um: UserManager
     if callback.data == CB_USER_ADD_CANCEL:
         await state.clear()
         await callback.message.edit_text("Добавление оператора отменено.")
+        await restore_admin_menu(
+            callback.message, um, "Меню восстановлено."
+        )
         await callback.answer()
         return
 
@@ -958,6 +1045,11 @@ async def cb_useradd(callback: CallbackQuery, state: FSMContext, um: UserManager
             await do_add_user(callback.message.bot, um, user_id, role)
             await callback.message.edit_text(
                 f"✅ Пользователь {user_id} добавлен с ролью {role}."
+            )
+            await restore_admin_menu(
+                callback.message,
+                um,
+                "Новому оператору нужно написать боту /start.",
             )
         except Exception as e:
             await callback.message.edit_text(f"❌ Ошибка: {e}")
@@ -1107,6 +1199,30 @@ async def main():
         ),
         StateFilter(AddUserStates.waiting_for_id),
         F.text,
+    )
+
+    dp.message.register(
+        partial(
+            fsm_adduser_contact,
+            wg_admin=wg_admin,
+            cfg=bot_cfg,
+            service=service,
+            um=um,
+        ),
+        StateFilter(AddUserStates.waiting_for_id),
+        F.contact,
+    )
+
+    dp.message.register(
+        partial(
+            fsm_adduser_shared,
+            wg_admin=wg_admin,
+            cfg=bot_cfg,
+            service=service,
+            um=um,
+        ),
+        StateFilter(AddUserStates.waiting_for_id),
+        F.users_shared,
     )
 
     dp.message.register(

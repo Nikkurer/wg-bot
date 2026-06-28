@@ -1,11 +1,13 @@
 from keyboards import (
     BTN_ADD_CLIENT,
+    BTN_PICK_USER,
     CB_CLIENTS_PAGE,
     CB_STATS,
     CB_USER_ADD_ROLE,
     CB_USER_REMOVE_ASK,
     add_client_cancel_keyboard,
     add_user_cancel_keyboard,
+    add_user_pick_keyboard,
     add_user_role_keyboard,
     client_actions_keyboard,
     clients_pagination_keyboard,
@@ -34,7 +36,7 @@ def test_client_actions_admin_has_rotate_and_remove():
 
 
 def test_callbacks_fit_telegram_limit():
-    keyboards = [
+    inline_keyboards = [
         rotate_confirm_keyboard(99999),
         remove_confirm_keyboard(99999),
         client_actions_keyboard(99999, is_admin=True),
@@ -45,10 +47,13 @@ def test_callbacks_fit_telegram_limit():
         operator_remove_confirm_keyboard(123456789),
         operators_footer_keyboard(),
     ]
-    for kb in keyboards:
+    for kb in inline_keyboards:
         for row in kb.inline_keyboard:
             for btn in row:
                 assert len(btn.callback_data.encode("utf-8")) <= 64
+
+    pick_kb = add_user_pick_keyboard()
+    assert pick_kb.keyboard[0][0].request_users.request_id == 1
 
 
 def test_clients_pagination_single_page_returns_none():
@@ -87,6 +92,15 @@ def test_operator_row_superadmin_has_no_remove():
 def test_operator_row_admin_has_remove():
     kb = operator_row_keyboard(222, "admin")
     assert kb.inline_keyboard[0][0].callback_data == f"{CB_USER_REMOVE_ASK}:222"
+
+
+def test_add_user_pick_keyboard_has_request_users():
+    kb = add_user_pick_keyboard()
+    btn = kb.keyboard[0][0]
+    assert btn.text == BTN_PICK_USER
+    assert btn.request_users is not None
+    assert btn.request_users.request_id == 1
+    assert btn.request_users.max_quantity == 1
 
 
 def test_add_user_role_keyboard_has_admin_and_user():
