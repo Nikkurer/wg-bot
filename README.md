@@ -33,12 +33,37 @@ docker compose up -d --build
 | Модуль               | Назначение                         |
 | -------------------- | ---------------------------------- |
 | `main.py`            | Telegram (aiogram), handlers       |
+| `keyboards.py`       | Reply-меню и inline-кнопки         |
+| `client_list.py`     | Пагинация и индексы клиентов       |
+| `states.py`          | FSM-состояния диалогов             |
 | `config.py`          | Загрузка конфигурации              |
 | `wg_admin_client.py` | HTTP-клиент wg-admin (Unix socket) |
 | `client_manager.py`  | Keygen, IP, client `.conf`, файлы  |
 | `service.py`         | Orchestration create/delete/rotate |
 | `users.py`           | RBAC операторов                    |
 
+
+## Интерфейс (кнопки)
+
+После `/start` бот показывает reply-меню. Основные действия — через кнопки, slash-команды остаются как fallback.
+
+**Все операторы (`user`+):**
+
+| Кнопка | Действие |
+| ------ | -------- |
+| 📊 Статус | Состояние WireGuard и пиров |
+| 👥 Клиенты | Список клиентов (по 8 на страницу) + статистика на карточке |
+| ❓ Справка | Справка по меню |
+
+**Только `admin` / `superadmin`:**
+
+| Кнопка | Действие |
+| ------ | -------- |
+| ➕ Клиент | Диалог: ввод имени → `.conf` + QR |
+| ⚠️ Drift | Проверка расхождения storage vs WireGuard |
+| 👤 Операторы | Список операторов, добавление и удаление |
+
+На карточке клиента (admin): **🔄 Ротация**, **🗑 Удалить** (с подтверждением).
 
 ## Пользователи и роли
 
@@ -47,28 +72,15 @@ docker compose up -d --build
 | Роль         | Как назначается                                  | Права                                              |
 | ------------ | ------------------------------------------------ | -------------------------------------------------- |
 | `superadmin` | `ALLOWED_USERS` в `config.yaml` (список TG ID)   | Всё; нельзя удалить через бота                      |
-| `admin`      | `/adduser <id> admin`                            | Управление клиентами и пользователями              |
-| `user`       | `/adduser <id> user`                             | Просмотр: `/status`, `/listclients`, статистика    |
-
-Команды по правам:
-
-- **Любой зарегистрированный** (`user`+): `/help`, `/status`, `/listclients`, кнопка статистики клиента.
-- **Только `admin`/`superadmin`**: `/addclient`, `/removeclient`, `/rotateclient`, `/drift`, `/adduser`, `/removeuser`, `/listusers`.
-
-Управление операторами:
-
-```
-/adduser 123456789 admin     # выдать права администратора
-/adduser 987654321 user      # базовый доступ (просмотр)
-/removeuser 987654321        # удалить (superadmin удалить нельзя)
-/listusers                   # список операторов с ролями
-```
+| `admin`      | Кнопка «➕ Добавить оператора» или `/adduser`     | Управление клиентами и операторами                  |
+| `user`       | Кнопка «➕ Добавить оператора» или `/adduser`     | Просмотр: статус, список клиентов, статистика      |
 
 Обычные операторы хранятся в JSON (`USERS_FILE` в state-каталоге), супер-админы — в `config.yaml`.
+
+Slash-команды (fallback): `/addclient`, `/removeclient`, `/rotateclient`, `/adduser`, `/removeuser`.
 
 ## Тесты
 
 ```bash
 uv run pytest tests/ -v
 ```
-

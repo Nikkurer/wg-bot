@@ -26,6 +26,13 @@ from aiogram.types import (
     Message,
 )
 from bootstrap import enrich_from_wg_admin
+from client_list import (
+    CLIENTS_PAGE_SIZE,
+    client_index_in_sorted,
+    global_client_index,
+    paginate_clients,
+    sort_clients,
+)
 from client_manager import ClientManagerError
 from config import BotConfig, ConfigError, load_config
 from keyboards import (
@@ -43,6 +50,7 @@ from keyboards import (
     CB_ROTATE_ASK,
     CB_ROTATE_CANCEL,
     CB_ROTATE_CONFIRM,
+    CB_CLIENTS_PAGE,
     CB_USER_ADD_CANCEL,
     CB_USER_ADD_ROLE,
     CB_USER_ADD_START,
@@ -53,7 +61,9 @@ from keyboards import (
     add_user_cancel_keyboard,
     add_user_role_keyboard,
     client_actions_keyboard,
+    clients_pagination_keyboard,
     main_menu,
+    parse_callback_index,
     operator_remove_confirm_keyboard,
     operator_row_keyboard,
     operators_footer_keyboard,
@@ -356,28 +366,103 @@ async def handle_menu(
         await cmd_listusers(message, um)
 
 
-async def prompt_rotate(message: Message, name: str, service: ClientService):
-    """Запрос подтверждения ротации ключей клиента."""
-    if not service.clients.name_exists(name):
-        await message.answer(f"Client '{name}' not found.")
+async def sorted_clients(service: ClientService) -> list:
+    return sort_clients(await service.list_clients_merged())
+
+
+async def client_at_index(service: ClientService, idx: int) -> dict | None:
+    clients = await sorted_clients(service)
+    if 0 <= idx < len(clients):
+        return clients[idx]
+    return None
+
+
+def format_client_card(c: dict) -> str:
+    ip_display = c["ip"]
+    if c.get("ip_v6"):
+        ip_display = f"{c['ip']}, {c['ip_v6']}"
+    local_mark = "" if c.get("has_local_conf") else " ⚠️ no local conf"
+    return (
+        f"• {c['name']} — {ip_display} "
+        f"(pubkey: {c['pubkey'][:8]}...){local_mark}\n"
+    )
+
+
+async def send_clients_page(
+    message: Message,
+    service: ClientService,
+    um: UserManager,
+    page: int = 0,
+):
+    """Отправляет страницу списка клиентов с пагинацией."""
+    clients = await sorted_clients(service)
+    if not clients:
+        await message.answer("Нет клиентов.")
         return
+
+    page_clients, page, total_pages = paginate_clients(clients, page)
+    is_admin = um.is_admin(message.from_user.id)
+
+    for i, c in enumerate(page_clients):
+        idx = global_client_index(page, i)
+        await message.answer(
+            format_client_card(c),
+            reply_markup=client_actions_keyboard(idx, is_admin=is_admin),
+        )
+
+    nav = clients_pagination_keyboard(page, total_pages)
+    if nav:
+        await message.answer(
+            f"Клиенты — страница {page + 1}/{total_pages} "
+            f"(всего {len(clients)}, по {CLIENTS_PAGE_SIZE})",
+            reply_markup=nav,
+        )
+
+
+async def prompt_rotate(message: Message, service: ClientService, idx: int):
+    """Запрос подтверждения ротации ключей клиента."""
+    client = await client_at_index(service, idx)
+    if not client:
+        await message.answer("Client not found.")
+        return
+    name = client["name"]
     await message.answer(
         f"⚠️ Ротация ключей для клиента '{name}'?\n\n"
         "После подтверждения старый .conf и QR перестанут работать.",
-        reply_markup=rotate_confirm_keyboard(name),
+        reply_markup=rotate_confirm_keyboard(idx),
     )
 
 
-async def prompt_remove(message: Message, name: str, service: ClientService):
+async def prompt_remove(message: Message, service: ClientService, idx: int):
     """Запрос подтверждения удаления клиента."""
-    if not service.clients.name_exists(name):
-        await message.answer(f"Client '{name}' not found.")
+    client = await client_at_index(service, idx)
+    if not client:
+        await message.answer("Client not found.")
         return
+    name = client["name"]
     await message.answer(
         f"⚠️ Удалить клиента '{name}'?\n\n"
         "Peer будет снят с сервера, локальные файлы удалены.",
-        reply_markup=remove_confirm_keyboard(name),
+        reply_markup=remove_confirm_keyboard(idx),
     )
+
+
+async def prompt_rotate_by_name(message: Message, service: ClientService, name: str):
+    clients = await sorted_clients(service)
+    idx = client_index_in_sorted(clients, name)
+    if idx is None:
+        await message.answer(f"Client '{name}' not found.")
+        return
+    await prompt_rotate(message, service, idx)
+
+
+async def prompt_remove_by_name(message: Message, service: ClientService, name: str):
+    clients = await sorted_clients(service)
+    idx = client_index_in_sorted(clients, name)
+    if idx is None:
+        await message.answer(f"Client '{name}' not found.")
+        return
+    await prompt_remove(message, service, idx)
 
 
 async def cb_stats(callback: CallbackQuery, service: ClientService, um: UserManager):
@@ -387,12 +472,12 @@ async def cb_stats(callback: CallbackQuery, service: ClientService, um: UserMana
         return
 
     try:
-        name = callback.data.split(":", 1)[1]
-        clients = await service.list_clients_merged()
-        client = next((c for c in clients if c["name"] == name), None)
+        idx = parse_callback_index(callback.data, CB_STATS)
+        client = await client_at_index(service, idx)
         if not client:
             await callback.answer("Client not found.", show_alert=True)
             return
+        name = client["name"]
         ip_display = client["ip"]
         if client.get("ip_v6"):
             ip_display = f"{client['ip']}, {client['ip_v6']}"
@@ -573,7 +658,7 @@ async def cmd_removeclient(
         )
         return
     name = command.args.strip()
-    await prompt_remove(message, name, service)
+    await prompt_remove_by_name(message, service, name)
 
 
 async def cmd_listclients(message: Message, service: ClientService, um: UserManager):
@@ -582,24 +667,24 @@ async def cmd_listclients(message: Message, service: ClientService, um: UserMana
         await message.answer("Access denied.")
         return
     try:
-        clients = await service.list_clients_merged()
-        if not clients:
-            await message.answer("Нет клиентов.")
-            return
-        is_admin = um.is_admin(message.from_user.id)
-        for c in clients:
-            ip_display = c["ip"]
-            if c.get("ip_v6"):
-                ip_display = f"{c['ip']}, {c['ip_v6']}"
-            local_mark = "" if c.get("has_local_conf") else " ⚠️ no local conf"
-            text = (
-                f"• {c['name']} — {ip_display} "
-                f"(pubkey: {c['pubkey'][:8]}...){local_mark}\n"
-            )
-            kb = client_actions_keyboard(c["name"], is_admin=is_admin)
-            await message.answer(text, reply_markup=kb)
+        await send_clients_page(message, service, um, page=0)
     except ClientServiceError as e:
         await message.answer(f"Failed: {e}")
+
+
+async def cb_clients_page(
+    callback: CallbackQuery, service: ClientService, um: UserManager
+):
+    """Переключение страницы списка клиентов."""
+    if not um.is_user(callback.from_user.id):
+        await callback.answer("Access denied.", show_alert=True)
+        return
+    page = parse_callback_index(callback.data, CB_CLIENTS_PAGE)
+    try:
+        await send_clients_page(callback.message, service, um, page=page)
+        await callback.answer()
+    except ClientServiceError as e:
+        await callback.answer(str(e), show_alert=True)
 
 
 async def cmd_drift(message: Message, wg_admin: WgAdminClient, um: UserManager):
@@ -629,7 +714,7 @@ async def cmd_rotateclient(
         )
         return
     name = command.args.strip()
-    await prompt_rotate(message, name, service)
+    await prompt_rotate_by_name(message, service, name)
 
 
 async def cb_rotate_ask(
@@ -639,8 +724,8 @@ async def cb_rotate_ask(
     if not um.is_admin(callback.from_user.id):
         await callback.answer("Access denied.", show_alert=True)
         return
-    name = callback.data.split(":", 2)[2]
-    await prompt_rotate(callback.message, name, service)
+    idx = parse_callback_index(callback.data, CB_ROTATE_ASK)
+    await prompt_rotate(callback.message, service, idx)
     await callback.answer()
 
 
@@ -659,7 +744,12 @@ async def cb_rotate(callback: CallbackQuery, service: ClientService, um: UserMan
         await callback.answer()
         return
 
-    name = callback.data.split(":", 2)[2]
+    idx = parse_callback_index(callback.data, CB_ROTATE_CONFIRM)
+    client = await client_at_index(service, idx)
+    if not client:
+        await callback.answer("Client not found.", show_alert=True)
+        return
+    name = client["name"]
     try:
         res = await service.rotate_client(name)
         await callback.message.edit_text(
@@ -691,8 +781,8 @@ async def cb_remove(callback: CallbackQuery, service: ClientService, um: UserMan
         return
 
     if callback.data.startswith(f"{CB_REMOVE_ASK}:"):
-        name = callback.data.split(":", 2)[2]
-        await prompt_remove(callback.message, name, service)
+        idx = parse_callback_index(callback.data, CB_REMOVE_ASK)
+        await prompt_remove(callback.message, service, idx)
         await callback.answer()
         return
 
@@ -700,7 +790,12 @@ async def cb_remove(callback: CallbackQuery, service: ClientService, um: UserMan
         await callback.answer()
         return
 
-    name = callback.data.split(":", 2)[2]
+    idx = parse_callback_index(callback.data, CB_REMOVE_CONFIRM)
+    client = await client_at_index(service, idx)
+    if not client:
+        await callback.answer("Client not found.", show_alert=True)
+        return
+    name = client["name"]
     try:
         await service.delete_client(name)
         await callback.message.edit_text(f"✅ Client '{name}' removed.")
@@ -1021,6 +1116,10 @@ async def main():
 
     dp.callback_query.register(
         partial(cb_stats, service=service, um=um), F.data.startswith("stats:")
+    )
+    dp.callback_query.register(
+        partial(cb_clients_page, service=service, um=um),
+        F.data.startswith(f"{CB_CLIENTS_PAGE}:"),
     )
     dp.callback_query.register(
         partial(cb_rotate_ask, service=service, um=um),

@@ -1,20 +1,19 @@
 """Telegram keyboards and callback_data conventions.
 
-Callback prefixes (max 64 bytes total in callback_data):
-  stats:{name}            — client traffic stats
-  rotate:ask:{name}       — prompt key rotation confirm
-  rotate:confirm:{name}   — execute key rotation
+Client actions use global index into sorted client list (not name) to stay
+within Telegram callback_data 64-byte limit.
+
+Callback prefixes:
+  stats:{idx}             — client traffic stats
+  rotate:ask:{idx}        — prompt key rotation confirm
+  rotate:confirm:{idx}    — execute key rotation
   rotate:cancel           — cancel rotation dialog
-  remove:ask:{name}       — prompt client removal confirm
-  remove:confirm:{name}   — execute client removal
+  remove:ask:{idx}        — prompt client removal confirm
+  remove:confirm:{idx}    — execute client removal
   remove:cancel           — cancel removal dialog
+  clients:page:{n}        — paginated client list
   addclient:cancel        — cancel add-client dialog (FSM)
-  useradd:start           — start add-operator dialog (FSM)
-  useradd:cancel          — cancel add-operator dialog
-  useradd:role:{id}:{role} — confirm operator role (admin|user)
-  userremove:ask:{id}     — prompt operator removal confirm
-  userremove:confirm:{id} — execute operator removal
-  userremove:cancel       — cancel operator removal dialog
+  useradd:* / userremove:* — operator management
 """
 
 from typing import Optional
@@ -47,6 +46,7 @@ CB_ROTATE_CANCEL = "rotate:cancel"
 CB_REMOVE_ASK = "remove:ask"
 CB_REMOVE_CONFIRM = "remove:confirm"
 CB_REMOVE_CANCEL = "remove:cancel"
+CB_CLIENTS_PAGE = "clients:page"
 CB_ADDCLIENT_CANCEL = "addclient:cancel"
 CB_USER_ADD_START = "useradd:start"
 CB_USER_ADD_CANCEL = "useradd:cancel"
@@ -54,6 +54,12 @@ CB_USER_ADD_ROLE = "useradd:role"
 CB_USER_REMOVE_ASK = "userremove:ask"
 CB_USER_REMOVE_CONFIRM = "userremove:confirm"
 CB_USER_REMOVE_CANCEL = "userremove:cancel"
+
+
+def parse_callback_index(data: str, prefix: str) -> int:
+    """Extract integer index from callback_data like ``prefix:42``."""
+    suffix = data[len(prefix) + 1 :]
+    return int(suffix)
 
 
 def main_menu(is_admin: bool) -> ReplyKeyboardMarkup:
@@ -70,32 +76,32 @@ def main_menu(is_admin: bool) -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
-def client_actions_keyboard(name: str, *, is_admin: bool) -> InlineKeyboardMarkup:
+def client_actions_keyboard(idx: int, *, is_admin: bool) -> InlineKeyboardMarkup:
     """Inline actions for a single client row in /listclients."""
     row = [
-        InlineKeyboardButton(text="📊 Статистика", callback_data=f"{CB_STATS}:{name}")
+        InlineKeyboardButton(text="📊 Статистика", callback_data=f"{CB_STATS}:{idx}")
     ]
     if is_admin:
         row.extend(
             [
                 InlineKeyboardButton(
-                    text="🔄 Ротация", callback_data=f"{CB_ROTATE_ASK}:{name}"
+                    text="🔄 Ротация", callback_data=f"{CB_ROTATE_ASK}:{idx}"
                 ),
                 InlineKeyboardButton(
-                    text="🗑 Удалить", callback_data=f"{CB_REMOVE_ASK}:{name}"
+                    text="🗑 Удалить", callback_data=f"{CB_REMOVE_ASK}:{idx}"
                 ),
             ]
         )
     return InlineKeyboardMarkup(inline_keyboard=[row])
 
 
-def rotate_confirm_keyboard(name: str) -> InlineKeyboardMarkup:
+def rotate_confirm_keyboard(idx: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
                     text="✅ Подтвердить",
-                    callback_data=f"{CB_ROTATE_CONFIRM}:{name}",
+                    callback_data=f"{CB_ROTATE_CONFIRM}:{idx}",
                 ),
                 InlineKeyboardButton(
                     text="❌ Отмена", callback_data=CB_ROTATE_CANCEL
@@ -105,12 +111,12 @@ def rotate_confirm_keyboard(name: str) -> InlineKeyboardMarkup:
     )
 
 
-def remove_confirm_keyboard(name: str) -> InlineKeyboardMarkup:
+def remove_confirm_keyboard(idx: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="✅ Удалить", callback_data=f"{CB_REMOVE_CONFIRM}:{name}"
+                    text="✅ Удалить", callback_data=f"{CB_REMOVE_CONFIRM}:{idx}"
                 ),
                 InlineKeyboardButton(
                     text="❌ Отмена", callback_data=CB_REMOVE_CANCEL
@@ -118,6 +124,31 @@ def remove_confirm_keyboard(name: str) -> InlineKeyboardMarkup:
             ]
         ]
     )
+
+
+def clients_pagination_keyboard(page: int, total_pages: int) -> InlineKeyboardMarkup | None:
+    """Navigation row for paginated client list. None if single page."""
+    if total_pages <= 1:
+        return None
+    row = []
+    if page > 0:
+        row.append(
+            InlineKeyboardButton(
+                text="◀️ Назад", callback_data=f"{CB_CLIENTS_PAGE}:{page - 1}"
+            )
+        )
+    row.append(
+        InlineKeyboardButton(
+            text=f"{page + 1}/{total_pages}", callback_data=f"{CB_CLIENTS_PAGE}:{page}"
+        )
+    )
+    if page < total_pages - 1:
+        row.append(
+            InlineKeyboardButton(
+                text="▶️ Вперёд", callback_data=f"{CB_CLIENTS_PAGE}:{page + 1}"
+            )
+        )
+    return InlineKeyboardMarkup(inline_keyboard=[row])
 
 
 def add_client_cancel_keyboard() -> InlineKeyboardMarkup:
