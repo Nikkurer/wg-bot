@@ -12,17 +12,11 @@
 
 **Файлы:** `keyboards.py`, `main.py` (`cb_rotate`, `cb_remove`, `prompt_rotate`, `prompt_remove`)
 
-**Проблема:** в `callback_data` передаётся индекс в отсортированном списке (`remove:confirm:3`). Между «спросить» и «подтвердить» список может измениться — под тем же индексом окажется другой клиент.
+**Проблема:** в `callback_data` передавался индекс в отсортированном списке. Между «спросить» и «подтвердить» список мог измениться — под тем же индексом оказывался другой клиент.
 
-**Сценарий:** admin A открывает удаление `alice` (idx 3), admin B удаляет клиентов 0–2, A подтверждает → удаляется `bob`.
+**Fix:** pubkey в callback (`stats:{pubkey}`, `remove:confirm:{pubkey}` и т.д.); lookup через `client_by_pubkey()`; `build_callback_data()` для проверки 64 байт.
 
-**Варианты fix (с учётом лимита Telegram 64 байта на `callback_data`):**
-- pubkey в callback (~44 символа + prefix ≈ 59 байт — влезает);
-- имя клиента + `maxlength` в `validate_name` (prefix `remove:confirm:` = 15 байт → имя до ~49 символов);
-- index только для UI, а на confirm — резолв по pubkey/name из FSM или повторный lookup по стабильному id.
-- для новых callback использовать ``build_callback_data()`` в ``keyboards.py`` — проверка 64 байт при сборке клавиатуры + тест ``test_callbacks_fit_telegram_limit``.
-
-**Статус:** `[~]` — обсуждается
+**Статус:** `[x]` — сделано
 
 ---
 

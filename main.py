@@ -29,8 +29,8 @@ from aiogram.types import (
 from bootstrap import enrich_from_wg_admin
 from client_list import (
     CLIENTS_PAGE_SIZE,
-    client_index_in_sorted,
-    global_client_index,
+    client_by_name,
+    client_by_pubkey,
     paginate_clients,
     sort_clients,
 )
@@ -52,6 +52,7 @@ from keyboards import (
     CB_ROTATE_CANCEL,
     CB_ROTATE_CONFIRM,
     CB_CLIENTS_PAGE,
+    CB_STATS,
     CB_USER_ADD_CANCEL,
     CB_USER_ADD_ROLE,
     CB_USER_ADD_START,
@@ -66,6 +67,7 @@ from keyboards import (
     clients_pagination_keyboard,
     main_menu,
     parse_callback_index,
+    parse_callback_suffix,
     operator_remove_confirm_keyboard,
     operator_row_keyboard,
     operators_footer_keyboard,
@@ -390,11 +392,8 @@ async def sorted_clients(service: ClientService) -> list:
     return sort_clients(await service.list_clients_merged())
 
 
-async def client_at_index(service: ClientService, idx: int) -> dict | None:
-    clients = await sorted_clients(service)
-    if 0 <= idx < len(clients):
-        return clients[idx]
-    return None
+async def find_client_by_pubkey(service: ClientService, pubkey: str) -> dict | None:
+    return client_by_pubkey(await sorted_clients(service), pubkey)
 
 
 def format_client_card(c: dict) -> str:
@@ -423,11 +422,10 @@ async def send_clients_page(
     page_clients, page, total_pages = paginate_clients(clients, page)
     is_admin = um.is_admin(message.from_user.id)
 
-    for i, c in enumerate(page_clients):
-        idx = global_client_index(page, i)
+    for c in page_clients:
         await message.answer(
             format_client_card(c),
-            reply_markup=client_actions_keyboard(idx, is_admin=is_admin),
+            reply_markup=client_actions_keyboard(c["pubkey"], is_admin=is_admin),
         )
 
     nav = clients_pagination_keyboard(page, total_pages)
@@ -439,9 +437,9 @@ async def send_clients_page(
         )
 
 
-async def prompt_rotate(message: Message, service: ClientService, idx: int):
+async def prompt_rotate(message: Message, service: ClientService, pubkey: str):
     """Запрос подтверждения ротации ключей клиента."""
-    client = await client_at_index(service, idx)
+    client = await find_client_by_pubkey(service, pubkey)
     if not client:
         await message.answer("Client not found.")
         return
@@ -449,13 +447,13 @@ async def prompt_rotate(message: Message, service: ClientService, idx: int):
     await message.answer(
         f"⚠️ Ротация ключей для клиента '{name}'?\n\n"
         "После подтверждения старый .conf и QR перестанут работать.",
-        reply_markup=rotate_confirm_keyboard(idx),
+        reply_markup=rotate_confirm_keyboard(pubkey),
     )
 
 
-async def prompt_remove(message: Message, service: ClientService, idx: int):
+async def prompt_remove(message: Message, service: ClientService, pubkey: str):
     """Запрос подтверждения удаления клиента."""
-    client = await client_at_index(service, idx)
+    client = await find_client_by_pubkey(service, pubkey)
     if not client:
         await message.answer("Client not found.")
         return
@@ -463,26 +461,26 @@ async def prompt_remove(message: Message, service: ClientService, idx: int):
     await message.answer(
         f"⚠️ Удалить клиента '{name}'?\n\n"
         "Peer будет снят с сервера, локальные файлы удалены.",
-        reply_markup=remove_confirm_keyboard(idx),
+        reply_markup=remove_confirm_keyboard(pubkey),
     )
 
 
 async def prompt_rotate_by_name(message: Message, service: ClientService, name: str):
     clients = await sorted_clients(service)
-    idx = client_index_in_sorted(clients, name)
-    if idx is None:
+    client = client_by_name(clients, name)
+    if client is None:
         await message.answer(f"Client '{name}' not found.")
         return
-    await prompt_rotate(message, service, idx)
+    await prompt_rotate(message, service, client["pubkey"])
 
 
 async def prompt_remove_by_name(message: Message, service: ClientService, name: str):
     clients = await sorted_clients(service)
-    idx = client_index_in_sorted(clients, name)
-    if idx is None:
+    client = client_by_name(clients, name)
+    if client is None:
         await message.answer(f"Client '{name}' not found.")
         return
-    await prompt_remove(message, service, idx)
+    await prompt_remove(message, service, client["pubkey"])
 
 
 async def cb_stats(callback: CallbackQuery, service: ClientService, um: UserManager):
@@ -492,8 +490,8 @@ async def cb_stats(callback: CallbackQuery, service: ClientService, um: UserMana
         return
 
     try:
-        idx = parse_callback_index(callback.data, CB_STATS)
-        client = await client_at_index(service, idx)
+        pubkey = parse_callback_suffix(callback.data, CB_STATS)
+        client = await find_client_by_pubkey(service, pubkey)
         if not client:
             await callback.answer("Client not found.", show_alert=True)
             return
@@ -746,8 +744,8 @@ async def cb_rotate_ask(
     if not um.is_admin(callback.from_user.id):
         await callback.answer("Access denied.", show_alert=True)
         return
-    idx = parse_callback_index(callback.data, CB_ROTATE_ASK)
-    await prompt_rotate(callback.message, service, idx)
+    pubkey = parse_callback_suffix(callback.data, CB_ROTATE_ASK)
+    await prompt_rotate(callback.message, service, pubkey)
     await callback.answer()
 
 
@@ -766,8 +764,8 @@ async def cb_rotate(callback: CallbackQuery, service: ClientService, um: UserMan
         await callback.answer()
         return
 
-    idx = parse_callback_index(callback.data, CB_ROTATE_CONFIRM)
-    client = await client_at_index(service, idx)
+    pubkey = parse_callback_suffix(callback.data, CB_ROTATE_CONFIRM)
+    client = await find_client_by_pubkey(service, pubkey)
     if not client:
         await callback.answer("Client not found.", show_alert=True)
         return
@@ -803,8 +801,8 @@ async def cb_remove(callback: CallbackQuery, service: ClientService, um: UserMan
         return
 
     if callback.data.startswith(f"{CB_REMOVE_ASK}:"):
-        idx = parse_callback_index(callback.data, CB_REMOVE_ASK)
-        await prompt_remove(callback.message, service, idx)
+        pubkey = parse_callback_suffix(callback.data, CB_REMOVE_ASK)
+        await prompt_remove(callback.message, service, pubkey)
         await callback.answer()
         return
 
@@ -812,8 +810,8 @@ async def cb_remove(callback: CallbackQuery, service: ClientService, um: UserMan
         await callback.answer()
         return
 
-    idx = parse_callback_index(callback.data, CB_REMOVE_CONFIRM)
-    client = await client_at_index(service, idx)
+    pubkey = parse_callback_suffix(callback.data, CB_REMOVE_CONFIRM)
+    client = await find_client_by_pubkey(service, pubkey)
     if not client:
         await callback.answer("Client not found.", show_alert=True)
         return

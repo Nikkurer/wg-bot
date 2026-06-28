@@ -34,7 +34,7 @@ docker compose up -d --build
 | -------------------- | ---------------------------------- |
 | `main.py`            | Telegram (aiogram), handlers       |
 | `keyboards.py`       | Reply-меню и inline-кнопки         |
-| `client_list.py`     | Пагинация и индексы клиентов       |
+| `client_list.py`     | Пагинация и lookup клиентов по pubkey |
 | `states.py`          | FSM-состояния диалогов             |
 | `config.py`          | Загрузка конфигурации              |
 | `wg_admin_client.py` | HTTP-клиент wg-admin (Unix socket) |

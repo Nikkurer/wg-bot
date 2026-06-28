@@ -1,14 +1,31 @@
 from client_list import (
     CLIENTS_PAGE_SIZE,
-    client_index_in_sorted,
-    global_client_index,
+    WG_PUBKEY_LEN,
+    client_by_name,
+    client_by_pubkey,
     paginate_clients,
     sort_clients,
 )
 
+SAMPLE_PUBKEY = "A" * 43 + "="
+ALICE_PUBKEY = "C" * 43 + "="
+BOB_PUBKEY = "D" * 43 + "="
+
 
 def _clients(names):
-    return [{"name": n, "ip": f"10.0.0.{i}"} for i, n in enumerate(names, 1)]
+    pubkeys = {
+        "alice": ALICE_PUBKEY,
+        "bob": BOB_PUBKEY,
+        "carol": SAMPLE_PUBKEY,
+    }
+    return [
+        {
+            "name": n,
+            "ip": f"10.0.0.{i}",
+            "pubkey": pubkeys.get(n, SAMPLE_PUBKEY),
+        }
+        for i, n in enumerate(names, 1)
+    ]
 
 
 def test_sort_clients_by_name():
@@ -39,12 +56,18 @@ def test_paginate_clamps_page():
     assert total == 1
 
 
-def test_global_client_index():
-    assert global_client_index(0, 3) == 3
-    assert global_client_index(1, 2) == CLIENTS_PAGE_SIZE + 2
-
-
-def test_client_index_in_sorted():
+def test_client_by_pubkey():
     clients = sort_clients(_clients(["bob", "alice"]))
-    assert client_index_in_sorted(clients, "alice") == 0
-    assert client_index_in_sorted(clients, "missing") is None
+    assert client_by_pubkey(clients, ALICE_PUBKEY)["name"] == "alice"
+    assert client_by_pubkey(clients, BOB_PUBKEY)["name"] == "bob"
+    assert client_by_pubkey(clients, "missing") is None
+
+
+def test_client_by_name():
+    clients = sort_clients(_clients(["bob", "alice"]))
+    assert client_by_name(clients, "alice")["pubkey"] == ALICE_PUBKEY
+    assert client_by_name(clients, "missing") is None
+
+
+def test_wg_pubkey_len_constant():
+    assert len(SAMPLE_PUBKEY) == WG_PUBKEY_LEN

@@ -1,9 +1,18 @@
 import pytest
 
+from client_list import (
+    CLIENTS_PAGE_SIZE,
+    WG_PUBKEY_LEN,
+    client_by_name,
+    client_by_pubkey,
+    paginate_clients,
+    sort_clients,
+)
 from keyboards import (
     BTN_ADD_CLIENT,
     BTN_PICK_USER,
     CB_CLIENTS_PAGE,
+    CB_REMOVE_CONFIRM,
     CB_STATS,
     CB_USER_ADD_ROLE,
     CB_USER_REMOVE_ASK,
@@ -21,31 +30,50 @@ from keyboards import (
     operator_row_keyboard,
     operators_footer_keyboard,
     parse_callback_index,
+    parse_callback_suffix,
     remove_confirm_keyboard,
     rotate_confirm_keyboard,
     validate_callback_data,
 )
 
+# WireGuard pubkey: 44-char base64 (fits Telegram callback_data with action prefix).
+SAMPLE_PUBKEY = "A" * 43 + "="
+
 
 def test_client_actions_viewer_has_stats_only():
-    kb = client_actions_keyboard(3, is_admin=False)
+    kb = client_actions_keyboard(SAMPLE_PUBKEY, is_admin=False)
     assert len(kb.inline_keyboard) == 1
     assert len(kb.inline_keyboard[0]) == 1
-    assert kb.inline_keyboard[0][0].callback_data == f"{CB_STATS}:3"
+    assert kb.inline_keyboard[0][0].callback_data == f"{CB_STATS}:{SAMPLE_PUBKEY}"
 
 
 def test_client_actions_admin_has_rotate_and_remove():
-    kb = client_actions_keyboard(5, is_admin=True)
+    kb = client_actions_keyboard(SAMPLE_PUBKEY, is_admin=True)
     assert len(kb.inline_keyboard[0]) == 3
     callbacks = [btn.callback_data for btn in kb.inline_keyboard[0]]
-    assert callbacks == ["stats:5", "rotate:ask:5", "remove:ask:5"]
+    assert callbacks == [
+        f"stats:{SAMPLE_PUBKEY}",
+        f"rotate:ask:{SAMPLE_PUBKEY}",
+        f"remove:ask:{SAMPLE_PUBKEY}",
+    ]
+
+
+def test_client_callbacks_use_pubkey_not_list_index():
+    kb = client_actions_keyboard(SAMPLE_PUBKEY, is_admin=True)
+    for btn in kb.inline_keyboard[0]:
+        suffix = btn.callback_data.split(":", 1)[-1]
+        if btn.callback_data.startswith("stats:"):
+            assert suffix == SAMPLE_PUBKEY
+        else:
+            assert suffix.endswith(SAMPLE_PUBKEY)
+        assert suffix.isdigit() is False
 
 
 def test_callbacks_fit_telegram_limit():
     inline_keyboards = [
-        rotate_confirm_keyboard(99999),
-        remove_confirm_keyboard(99999),
-        client_actions_keyboard(99999, is_admin=True),
+        rotate_confirm_keyboard(SAMPLE_PUBKEY),
+        remove_confirm_keyboard(SAMPLE_PUBKEY),
+        client_actions_keyboard(SAMPLE_PUBKEY, is_admin=True),
         clients_pagination_keyboard(99, 100),
         add_client_cancel_keyboard(),
         add_user_cancel_keyboard(),
@@ -63,6 +91,12 @@ def test_callbacks_fit_telegram_limit():
 
     pick_kb = add_user_pick_keyboard()
     assert pick_kb.keyboard[0][0].request_users.request_id == 1
+
+
+def test_client_action_callbacks_with_full_length_pubkey():
+    assert len(SAMPLE_PUBKEY) == WG_PUBKEY_LEN
+    data = build_callback_data(CB_REMOVE_CONFIRM, SAMPLE_PUBKEY)
+    assert len(data.encode("utf-8")) <= TELEGRAM_CALLBACK_DATA_MAX_BYTES
 
 
 def test_build_callback_data_within_limit():
@@ -91,9 +125,16 @@ def test_clients_pagination_multi_page():
     assert f"{CB_CLIENTS_PAGE}:2" in callbacks
 
 
-def test_parse_callback_index():
-    assert parse_callback_index("rotate:ask:12", "rotate:ask") == 12
-    assert parse_callback_index("stats:0", "stats") == 0
+def test_parse_callback_index_for_pagination():
+    assert parse_callback_index("clients:page:12", CB_CLIENTS_PAGE) == 12
+
+
+def test_parse_callback_suffix_for_pubkey():
+    assert parse_callback_suffix(f"stats:{SAMPLE_PUBKEY}", CB_STATS) == SAMPLE_PUBKEY
+    assert (
+        parse_callback_suffix(f"rotate:ask:{SAMPLE_PUBKEY}", "rotate:ask")
+        == SAMPLE_PUBKEY
+    )
 
 
 def test_admin_main_menu_has_add_client_button():
