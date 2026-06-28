@@ -3,6 +3,7 @@ from operator_add import (
     contact_user_id_or_error,
     format_operator_display,
     format_person_name,
+    pending_profile_from_fsm,
 )
 
 
@@ -43,6 +44,35 @@ def test_contact_user_id_or_error_ok():
     user_id, error = contact_user_id_or_error(987654321)
     assert user_id == 987654321
     assert error is None
+
+
+def test_pending_profile_from_fsm():
+    data = {
+        "pending_user_id": 123456789,
+        "pending_first_name": "Ivan",
+        "pending_last_name": "Petrov",
+        "pending_username": "ivan",
+    }
+    profile = pending_profile_from_fsm(data, 123456789)
+    assert profile == {
+        "first_name": "Ivan",
+        "last_name": "Petrov",
+        "username": "ivan",
+    }
+
+
+def test_pending_profile_from_fsm_string_id():
+    data = {
+        "pending_user_id": "123456789",
+        "pending_first_name": "Ivan",
+    }
+    profile = pending_profile_from_fsm(data, 123456789)
+    assert profile == {"first_name": "Ivan"}
+
+
+def test_pending_profile_from_fsm_mismatch():
+    data = {"pending_user_id": 111, "pending_first_name": "Ivan"}
+    assert pending_profile_from_fsm(data, 222) == {}
 
 
 def test_add_user_request_id_is_stable():

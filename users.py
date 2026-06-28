@@ -3,6 +3,8 @@ import os
 import tempfile
 from typing import List, Dict, Optional
 
+from operator_add import profile_from_fields
+
 
 class UserManagerError(Exception):
     """Исключение для ошибок управления пользователями бота.
@@ -155,12 +157,13 @@ class UserManager:
         if any(u["id"] == user_id for u in self._users) or user_id in self.superadmins:
             raise UserManagerError("Пользователь уже существует")
         record: Dict = {"id": user_id, "role": role}
-        if first_name:
-            record["first_name"] = first_name
-        if last_name:
-            record["last_name"] = last_name
-        if username:
-            record["username"] = username.lstrip("@")
+        record.update(
+            profile_from_fields(
+                first_name=first_name,
+                last_name=last_name,
+                username=username,
+            )
+        )
         self._users.append(record)
         self.save()
 

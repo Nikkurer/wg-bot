@@ -58,6 +58,23 @@ def format_operator_display(user: Dict[str, Any]) -> str:
     return str(user["id"])
 
 
+def pending_profile_from_fsm(data: dict, user_id: int) -> Dict[str, str]:
+    """Profile from FSM after contact/picker selection (before role is chosen)."""
+    pending_id = data.get("pending_user_id")
+    if pending_id is None:
+        return {}
+    try:
+        if int(pending_id) != int(user_id):
+            return {}
+    except (TypeError, ValueError):
+        return {}
+    return profile_from_fields(
+        first_name=data.get("pending_first_name"),
+        last_name=data.get("pending_last_name"),
+        username=data.get("pending_username"),
+    )
+
+
 def contact_user_id_or_error(user_id: Optional[int]) -> Tuple[Optional[int], Optional[str]]:
     if not user_id:
         return None, (

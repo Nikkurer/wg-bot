@@ -77,7 +77,7 @@ from operator_add import (
     contact_user_id_or_error,
     format_operator_display,
     format_person_name,
-    profile_from_fields,
+    pending_profile_from_fsm,
 )
 from service import ClientService, ClientServiceError
 from states import AddClientStates, AddUserStates
@@ -833,7 +833,7 @@ async def cb_remove(callback: CallbackQuery, service: ClientService, um: UserMan
 # --- user management handlers ---
 async def resolve_operator_label(bot: Bot, um: UserManager, user: dict) -> str:
     """Подпись оператора: сохранённый профиль, иначе get_chat, иначе id."""
-    if user.get("first_name") or user.get("username"):
+    if user.get("first_name") or user.get("last_name") or user.get("username"):
         return format_operator_display(user)
     try:
         chat = await bot.get_chat(user["id"])
@@ -911,6 +911,15 @@ async def prompt_add_user_role(
     username: str | None = None,
 ):
     """Снимает picker-клавиатуру и предлагает выбрать роль."""
+    if not (first_name or last_name or username):
+        try:
+            chat = await message.bot.get_chat(user_id)
+            first_name = chat.first_name
+            last_name = chat.last_name
+            username = chat.username
+        except TelegramBadRequest:
+            pass
+
     await state.set_state(AddUserStates.waiting_for_role)
     await state.update_data(
         pending_user_id=user_id,
@@ -933,9 +942,16 @@ async def prompt_add_user_role(
     )
 
 
-async def restore_admin_menu(message: Message, um: UserManager, text: str):
+async def restore_admin_menu(
+    message: Message,
+    um: UserManager,
+    text: str,
+    *,
+    user_id: int | None = None,
+):
     """Восстанавливает reply-меню после диалога добавления оператора."""
-    is_admin = um.is_admin(message.from_user.id)
+    operator_id = user_id if user_id is not None else message.from_user.id
+    is_admin = um.is_admin(operator_id)
     await message.answer(text, reply_markup=main_menu(is_admin))
 
 
@@ -1106,6 +1122,27 @@ async def fsm_adduser_shared(
     )
 
 
+async def fsm_adduser_user_shared(
+    message: Message,
+    state: FSMContext,
+    wg_admin: WgAdminClient,
+    cfg: BotConfig,
+    service: ClientService,
+    um: UserManager,
+):
+    """Fallback для user picker, если клиент прислал user_shared без имён."""
+    if not um.is_admin(message.from_user.id):
+        await state.clear()
+        await message.answer("Access denied.")
+        return
+
+    shared = message.user_shared
+    if not shared or shared.request_id != ADD_USER_REQUEST_ID:
+        return
+
+    await prompt_add_user_role(message, state, shared.user_id)
+
+
 async def cb_useradd(callback: CallbackQuery, state: FSMContext, um: UserManager):
     """Старт, выбор роли или отмена добавления оператора."""
     if not um.is_admin(callback.from_user.id):
@@ -1116,7 +1153,10 @@ async def cb_useradd(callback: CallbackQuery, state: FSMContext, um: UserManager
         await state.clear()
         await callback.message.edit_text("Добавление оператора отменено.")
         await restore_admin_menu(
-            callback.message, um, "Меню восстановлено."
+            callback.message,
+            um,
+            "Меню восстановлено.",
+            user_id=callback.from_user.id,
         )
         await callback.answer()
         return
@@ -1131,16 +1171,16 @@ async def cb_useradd(callback: CallbackQuery, state: FSMContext, um: UserManager
         user_id_str, role = payload.split(":", 1)
         user_id = int(user_id_str)
         data = await state.get_data()
-        profile_kwargs = {}
-        if data.get("pending_user_id") == user_id:
-            profile_kwargs = {
-                "first_name": data.get("pending_first_name"),
-                "last_name": data.get("pending_last_name"),
-                "username": data.get("pending_username"),
-            }
+        profile = pending_profile_from_fsm(data, user_id)
         try:
             await do_add_user(
-                callback.message.bot, um, user_id, role, **profile_kwargs
+                callback.message.bot,
+                um,
+                user_id,
+                role,
+                first_name=profile.get("first_name"),
+                last_name=profile.get("last_name"),
+                username=profile.get("username"),
             )
             await state.clear()
             added = next(u for u in um.list_users() if u["id"] == user_id)
@@ -1152,6 +1192,7 @@ async def cb_useradd(callback: CallbackQuery, state: FSMContext, um: UserManager
                 callback.message,
                 um,
                 "Новому оператору нужно написать боту /start.",
+                user_id=callback.from_user.id,
             )
         except Exception as e:
             await callback.message.edit_text(f"❌ Ошибка: {e}")
@@ -1327,6 +1368,18 @@ async def main():
         ),
         StateFilter(AddUserStates.waiting_for_id),
         F.users_shared,
+    )
+
+    dp.message.register(
+        partial(
+            fsm_adduser_user_shared,
+            wg_admin=wg_admin,
+            cfg=bot_cfg,
+            service=service,
+            um=um,
+        ),
+        StateFilter(AddUserStates.waiting_for_id),
+        F.user_shared,
     )
 
     dp.message.register(
