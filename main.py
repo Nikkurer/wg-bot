@@ -48,6 +48,7 @@ from error_messages import (
     format_drift_error,
     user_facing_error,
 )
+from private_chat import PrivateChatMiddleware
 from keyboards import (
     ADMIN_MENU_BUTTONS,
     BTN_ADD_CLIENT,
@@ -1430,6 +1431,8 @@ async def main():
 
     bot = Bot(token=bot_cfg.telegram_token)
     dp = Dispatcher(storage=MemoryStorage())
+    dp.message.outer_middleware(PrivateChatMiddleware())
+    dp.callback_query.outer_middleware(PrivateChatMiddleware())
 
     dp.message.register(partial(cmd_start, um=um), Command("start"))
     dp.message.register(partial(cmd_help, um=um), Command("help"))

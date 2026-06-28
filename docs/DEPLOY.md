@@ -23,6 +23,8 @@ RU-сервер
 - **wg-admin** установлен и запущен (`systemd`), интерфейс `wg-ru-clients`
 - Docker Engine + Docker Compose v2 на сервере
 - UID процесса wg-bot на хосте wg-admin: `-allowed-uids` должен включать UID `1000` (пользователь `wgbot` в образе)
+- Операторы работают с ботом **только в личных сообщениях**; не добавляйте бота в группы
+- В [@BotFather](https://t.me/BotFather): **Group Privacy** → Enable (`/setprivacy`)
 
 Проверка wg-admin:
 
