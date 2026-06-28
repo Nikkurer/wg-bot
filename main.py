@@ -323,12 +323,16 @@ async def apply_command_menus(bot: Bot, um: UserManager):
 async def cmd_start(message: Message, um: UserManager):
     """Приветствие и reply-меню по роли."""
     if not um.is_user(message.from_user.id):
-        await message.answer("Access denied.")
+        await message.answer(
+            "Access denied.\n"
+            "Обратитесь к администратору, чтобы получить доступ к боту."
+        )
         return
     is_admin = um.is_admin(message.from_user.id)
     await message.answer(
-        "WireGuard management bot.\n"
-        "Используйте кнопки меню или /help.",
+        "WireGuard management bot.\n\n"
+        "Используйте кнопки меню ниже или команду /help.\n"
+        "Если меню пропало — отправьте /start.",
         reply_markup=main_menu(is_admin),
     )
 
@@ -524,7 +528,9 @@ async def cmd_help(message: Message, um: UserManager):
             "  /adduser <id> <admin|user> — добавить оператора",
             "  /removeuser <id> — удалить оператора",
         ]
-    await message.answer("\n".join(lines))
+    lines += ["", "Если кнопки меню не видны — отправьте /start."]
+    is_admin = um.is_admin(message.from_user.id)
+    await message.answer("\n".join(lines), reply_markup=main_menu(is_admin))
 
 
 async def cmd_status(
