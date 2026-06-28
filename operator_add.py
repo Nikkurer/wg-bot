@@ -2,9 +2,26 @@
 
 from __future__ import annotations
 
-from typing import Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 ADD_USER_REQUEST_ID = 1
+
+
+def profile_from_fields(
+    *,
+    first_name: Optional[str] = None,
+    last_name: Optional[str] = None,
+    username: Optional[str] = None,
+) -> Dict[str, str]:
+    """Build optional profile dict for users.json (only non-empty fields)."""
+    profile: Dict[str, str] = {}
+    if first_name:
+        profile["first_name"] = first_name
+    if last_name:
+        profile["last_name"] = last_name
+    if username:
+        profile["username"] = username.lstrip("@")
+    return profile
 
 
 def format_person_name(
@@ -14,13 +31,31 @@ def format_person_name(
     username: Optional[str] = None,
     user_id: int,
 ) -> str:
-    parts = [first_name or "", last_name or ""]
-    name = " ".join(p for p in parts if p).strip()
+    return format_operator_display(
+        {
+            "id": user_id,
+            "first_name": first_name,
+            "last_name": last_name,
+            "username": username,
+        }
+    )
+
+
+def format_operator_display(user: Dict[str, Any]) -> str:
+    """Human-readable operator label: name, then @username, then id."""
+    name = " ".join(
+        p for p in (user.get("first_name") or "", user.get("last_name") or "") if p
+    ).strip()
+    username = user.get("username")
+    uname = f"@{str(username).lstrip('@')}" if username else None
+
+    if name and uname:
+        return f"{name} ({uname})"
     if name:
         return name
-    if username:
-        return f"@{username.lstrip('@')}"
-    return str(user_id)
+    if uname:
+        return uname
+    return str(user["id"])
 
 
 def contact_user_id_or_error(user_id: Optional[int]) -> Tuple[Optional[int], Optional[str]]:

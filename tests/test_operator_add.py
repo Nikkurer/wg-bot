@@ -1,12 +1,28 @@
 from operator_add import (
     ADD_USER_REQUEST_ID,
     contact_user_id_or_error,
+    format_operator_display,
     format_person_name,
 )
 
 
 def test_format_person_name_from_first_name():
-    assert format_person_name(first_name="Alice", user_id=123) == "Alice"
+    assert (
+        format_person_name(first_name="Alice", last_name="Smith", user_id=123)
+        == "Alice Smith"
+    )
+
+
+def test_format_operator_display_with_username():
+    label = format_operator_display(
+        {
+            "id": 123,
+            "first_name": "Alice",
+            "last_name": "Smith",
+            "username": "alice",
+        }
+    )
+    assert label == "Alice Smith (@alice)"
 
 
 def test_format_person_name_falls_back_to_username():

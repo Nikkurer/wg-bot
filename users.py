@@ -1,7 +1,7 @@
 import json
 import os
 import tempfile
-from typing import List, Dict
+from typing import List, Dict, Optional
 
 
 class UserManagerError(Exception):
@@ -128,12 +128,23 @@ class UserManager:
                 users.append({"id": sa, "role": "superadmin"})
         return users
 
-    def add_user(self, user_id: int, role: str):
+    def add_user(
+        self,
+        user_id: int,
+        role: str,
+        *,
+        first_name: Optional[str] = None,
+        last_name: Optional[str] = None,
+        username: Optional[str] = None,
+    ):
         """Добавляет нового пользователя.
 
         Args:
             user_id (int): ID пользователя Telegram.
             role (str): Роль пользователя. Должна быть "admin" или "user".
+            first_name (str, optional): Имя из Telegram-профиля.
+            last_name (str, optional): Фамилия из Telegram-профиля.
+            username (str, optional): Username без @.
 
         Raises:
             UserManagerError: Если роль невалидна, пользователь уже существует
@@ -143,8 +154,37 @@ class UserManager:
             raise UserManagerError("Роль должна быть 'admin' или 'user'")
         if any(u["id"] == user_id for u in self._users) or user_id in self.superadmins:
             raise UserManagerError("Пользователь уже существует")
-        self._users.append({"id": user_id, "role": role})
+        record: Dict = {"id": user_id, "role": role}
+        if first_name:
+            record["first_name"] = first_name
+        if last_name:
+            record["last_name"] = last_name
+        if username:
+            record["username"] = username.lstrip("@")
+        self._users.append(record)
         self.save()
+
+    def update_user_profile(
+        self,
+        user_id: int,
+        *,
+        first_name: Optional[str] = None,
+        last_name: Optional[str] = None,
+        username: Optional[str] = None,
+    ) -> bool:
+        """Обновляет отображаемый профиль оператора в users.json."""
+        for u in self._users:
+            if u["id"] != user_id:
+                continue
+            if first_name:
+                u["first_name"] = first_name
+            if last_name:
+                u["last_name"] = last_name
+            if username:
+                u["username"] = username.lstrip("@")
+            self.save()
+            return True
+        return False
 
     def remove_user(self, user_id: int):
         """Удаляет пользователя из списка.

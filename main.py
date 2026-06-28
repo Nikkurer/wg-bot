@@ -72,7 +72,13 @@ from keyboards import (
     remove_confirm_keyboard,
     rotate_confirm_keyboard,
 )
-from operator_add import ADD_USER_REQUEST_ID, contact_user_id_or_error, format_person_name
+from operator_add import (
+    ADD_USER_REQUEST_ID,
+    contact_user_id_or_error,
+    format_operator_display,
+    format_person_name,
+    profile_from_fields,
+)
 from service import ClientService, ClientServiceError
 from states import AddClientStates, AddUserStates
 from users import UserManager
@@ -331,6 +337,13 @@ async def cmd_start(message: Message, um: UserManager):
             "Обратитесь к администратору, чтобы получить доступ к боту."
         )
         return
+    user = message.from_user
+    um.update_user_profile(
+        user.id,
+        first_name=user.first_name,
+        last_name=user.last_name,
+        username=user.username,
+    )
     is_admin = um.is_admin(message.from_user.id)
     await message.answer(
         "WireGuard management bot.\n\n"
@@ -818,9 +831,47 @@ async def cb_remove(callback: CallbackQuery, service: ClientService, um: UserMan
 
 
 # --- user management handlers ---
-async def do_add_user(bot: Bot, um: UserManager, user_id: int, role: str) -> None:
+async def resolve_operator_label(bot: Bot, um: UserManager, user: dict) -> str:
+    """Подпись оператора: сохранённый профиль, иначе get_chat, иначе id."""
+    if user.get("first_name") or user.get("username"):
+        return format_operator_display(user)
+    try:
+        chat = await bot.get_chat(user["id"])
+        if user.get("role") != "superadmin":
+            um.update_user_profile(
+                user["id"],
+                first_name=chat.first_name,
+                last_name=chat.last_name,
+                username=chat.username,
+            )
+        return format_person_name(
+            first_name=chat.first_name,
+            last_name=chat.last_name,
+            username=chat.username,
+            user_id=user["id"],
+        )
+    except TelegramBadRequest:
+        return str(user["id"])
+
+
+async def do_add_user(
+    bot: Bot,
+    um: UserManager,
+    user_id: int,
+    role: str,
+    *,
+    first_name: str | None = None,
+    last_name: str | None = None,
+    username: str | None = None,
+) -> None:
     """Добавляет оператора и обновляет меню команд."""
-    um.add_user(user_id, role)
+    um.add_user(
+        user_id,
+        role,
+        first_name=first_name,
+        last_name=last_name,
+        username=username,
+    )
     await apply_command_menus(bot, um)
 
 
@@ -850,11 +901,31 @@ async def prompt_add_user(message: Message, state: FSMContext):
 
 
 async def prompt_add_user_role(
-    message: Message, state: FSMContext, user_id: int, display: str | None = None
+    message: Message,
+    state: FSMContext,
+    user_id: int,
+    display: str | None = None,
+    *,
+    first_name: str | None = None,
+    last_name: str | None = None,
+    username: str | None = None,
 ):
     """Снимает picker-клавиатуру и предлагает выбрать роль."""
-    await state.clear()
-    label = f"{display} ({user_id})" if display else str(user_id)
+    await state.set_state(AddUserStates.waiting_for_role)
+    await state.update_data(
+        pending_user_id=user_id,
+        pending_first_name=first_name,
+        pending_last_name=last_name,
+        pending_username=username,
+    )
+    label = display or format_operator_display(
+        {
+            "id": user_id,
+            "first_name": first_name,
+            "last_name": last_name,
+            "username": username,
+        }
+    )
     await message.answer("Пользователь выбран.", reply_markup=ReplyKeyboardRemove())
     await message.answer(
         f"Выберите роль для оператора {label}:",
@@ -868,10 +939,12 @@ async def restore_admin_menu(message: Message, um: UserManager, text: str):
     await message.answer(text, reply_markup=main_menu(is_admin))
 
 
-async def prompt_remove_user(message: Message, user_id: int):
+async def prompt_remove_user(message: Message, bot: Bot, um: UserManager, user_id: int):
     """Запрос подтверждения удаления оператора."""
+    user = next((u for u in um.list_users() if u["id"] == user_id), {"id": user_id})
+    label = await resolve_operator_label(bot, um, user)
     await message.answer(
-        f"⚠️ Удалить оператора {user_id}?\n\n"
+        f"⚠️ Удалить оператора {label}?\n\n"
         "Пользователь потеряет доступ к боту.",
         reply_markup=operator_remove_confirm_keyboard(user_id),
     )
@@ -890,7 +963,8 @@ async def cmd_listusers(message: Message, um: UserManager):
         )
         return
     for u in users:
-        text = f"👤 {u['id']} — {u['role']}"
+        label = await resolve_operator_label(message.bot, um, u)
+        text = f"👤 {label} — {u['role']}"
         kb = operator_row_keyboard(u["id"], u["role"])
         await message.answer(text, reply_markup=kb)
     await message.answer(
@@ -983,7 +1057,14 @@ async def fsm_adduser_contact(
         last_name=message.contact.last_name,
         user_id=user_id,
     )
-    await prompt_add_user_role(message, state, user_id, display)
+    await prompt_add_user_role(
+        message,
+        state,
+        user_id,
+        display,
+        first_name=message.contact.first_name,
+        last_name=message.contact.last_name,
+    )
 
 
 async def fsm_adduser_shared(
@@ -1014,7 +1095,15 @@ async def fsm_adduser_shared(
         username=user.username,
         user_id=user.user_id,
     )
-    await prompt_add_user_role(message, state, user.user_id, display)
+    await prompt_add_user_role(
+        message,
+        state,
+        user.user_id,
+        display,
+        first_name=user.first_name,
+        last_name=user.last_name,
+        username=user.username,
+    )
 
 
 async def cb_useradd(callback: CallbackQuery, state: FSMContext, um: UserManager):
@@ -1041,10 +1130,23 @@ async def cb_useradd(callback: CallbackQuery, state: FSMContext, um: UserManager
         payload = callback.data[len(f"{CB_USER_ADD_ROLE}:") :]
         user_id_str, role = payload.split(":", 1)
         user_id = int(user_id_str)
+        data = await state.get_data()
+        profile_kwargs = {}
+        if data.get("pending_user_id") == user_id:
+            profile_kwargs = {
+                "first_name": data.get("pending_first_name"),
+                "last_name": data.get("pending_last_name"),
+                "username": data.get("pending_username"),
+            }
         try:
-            await do_add_user(callback.message.bot, um, user_id, role)
+            await do_add_user(
+                callback.message.bot, um, user_id, role, **profile_kwargs
+            )
+            await state.clear()
+            added = next(u for u in um.list_users() if u["id"] == user_id)
+            label = format_operator_display(added)
             await callback.message.edit_text(
-                f"✅ Пользователь {user_id} добавлен с ролью {role}."
+                f"✅ Оператор {label} добавлен с ролью {role}."
             )
             await restore_admin_menu(
                 callback.message,
@@ -1072,7 +1174,7 @@ async def cb_userremove(callback: CallbackQuery, um: UserManager):
 
     if callback.data.startswith(f"{CB_USER_REMOVE_ASK}:"):
         user_id = int(callback.data.split(":", 2)[2])
-        await prompt_remove_user(callback.message, user_id)
+        await prompt_remove_user(callback.message, callback.message.bot, um, user_id)
         await callback.answer()
         return
 
@@ -1082,8 +1184,10 @@ async def cb_userremove(callback: CallbackQuery, um: UserManager):
 
     user_id = int(callback.data.split(":", 2)[2])
     try:
+        user = next((u for u in um.list_users() if u["id"] == user_id), {"id": user_id})
+        label = await resolve_operator_label(callback.message.bot, um, user)
         await do_remove_user(callback.message.bot, um, user_id)
-        await callback.message.edit_text(f"✅ Пользователь {user_id} удалён.")
+        await callback.message.edit_text(f"✅ Оператор {label} удалён.")
         await callback.answer()
     except Exception as e:
         await callback.message.edit_text(f"❌ Ошибка: {e}")
@@ -1111,7 +1215,7 @@ async def cmd_removeuser(message: Message, command: CommandObject, um: UserManag
         return
     try:
         removed_id = int(command.args.strip())
-        await prompt_remove_user(message, removed_id)
+        await prompt_remove_user(message, message.bot, um, removed_id)
     except ValueError:
         await message.answer("❌ Ошибка: ID должен быть числом.")
 

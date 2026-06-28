@@ -78,6 +78,26 @@ class TestUserManager:
         assert user_manager._users[0]["id"] == 111
         assert user_manager._users[0]["role"] == "user"
 
+    def test_add_user_with_profile(self, user_manager):
+        """Тест: добавление пользователя с профилем для отображения."""
+        user_manager.add_user(
+            111, "user", first_name="Alice", last_name="Smith", username="alice"
+        )
+        u = user_manager._users[0]
+        assert u["first_name"] == "Alice"
+        assert u["last_name"] == "Smith"
+        assert u["username"] == "alice"
+
+    def test_update_user_profile(self, user_manager):
+        """Тест: обновление профиля существующего пользователя."""
+        user_manager.add_user(111, "user")
+        assert user_manager.update_user_profile(
+            111, first_name="Bob", username="bob"
+        )
+        u = user_manager._users[0]
+        assert u["first_name"] == "Bob"
+        assert u["username"] == "bob"
+
     def test_add_user_invalid_role(self, user_manager):
         """Тест: добавление пользователя с невалидной ролью вызывает ошибку."""
         with pytest.raises(UserManagerError, match="Роль должна быть"):

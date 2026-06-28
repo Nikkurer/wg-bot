@@ -7,3 +7,4 @@ class AddClientStates(StatesGroup):
 
 class AddUserStates(StatesGroup):
     waiting_for_id = State()
+    waiting_for_role = State()
