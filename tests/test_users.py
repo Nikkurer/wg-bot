@@ -198,3 +198,55 @@ class TestUserManager:
         assert manager2.is_admin(111) is True
         assert manager2.is_user(222) is True
 
+    def test_save_sets_file_mode_0600(self, user_manager, temp_user_file):
+        """Тест: сохранение выставляет права 0600 на users.json."""
+        user_manager.add_user(111, "user")
+        mode = os.stat(temp_user_file).st_mode & 0o777
+        assert mode == 0o600
+
+    def test_load_rejects_non_list_root(self, temp_user_file):
+        with open(temp_user_file, "w", encoding="utf-8") as f:
+            json.dump({"id": 1, "role": "user"}, f)
+        with pytest.raises(UserManagerError, match="JSON-массив"):
+            UserManager(temp_user_file)
+
+    def test_load_rejects_invalid_role(self, temp_user_file):
+        with open(temp_user_file, "w", encoding="utf-8") as f:
+            json.dump([{"id": 1, "role": "superadmin"}], f)
+        with pytest.raises(UserManagerError, match="роль должна быть"):
+            UserManager(temp_user_file)
+
+    def test_load_rejects_non_int_id(self, temp_user_file):
+        with open(temp_user_file, "w", encoding="utf-8") as f:
+            json.dump([{"id": "1", "role": "user"}], f)
+        with pytest.raises(UserManagerError, match="id должен быть int"):
+            UserManager(temp_user_file)
+
+    def test_load_rejects_bool_id(self, temp_user_file):
+        with open(temp_user_file, "w", encoding="utf-8") as f:
+            json.dump([{"id": True, "role": "user"}], f)
+        with pytest.raises(UserManagerError, match="id должен быть int"):
+            UserManager(temp_user_file)
+
+    def test_load_rejects_unknown_fields(self, temp_user_file):
+        with open(temp_user_file, "w", encoding="utf-8") as f:
+            json.dump([{"id": 1, "role": "user", "is_root": True}], f)
+        with pytest.raises(UserManagerError, match="неизвестные поля"):
+            UserManager(temp_user_file)
+
+    def test_load_rejects_duplicate_ids(self, temp_user_file):
+        with open(temp_user_file, "w", encoding="utf-8") as f:
+            json.dump(
+                [{"id": 1, "role": "user"}, {"id": 1, "role": "admin"}],
+                f,
+            )
+        with pytest.raises(UserManagerError, match="дублирующийся id"):
+            UserManager(temp_user_file)
+
+    def test_atomic_write_rejects_symlink(self, temp_user_file):
+        os.remove(temp_user_file)
+        os.symlink("/etc/passwd", temp_user_file)
+        manager = UserManager.__new__(UserManager)
+        manager.path = temp_user_file
+        with pytest.raises(UserManagerError, match="symlink"):
+            manager._atomic_write("[]")

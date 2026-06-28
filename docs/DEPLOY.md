@@ -117,7 +117,7 @@ docker compose up -d --build
 |------|-----------|------------|
 | `/run/wg-admin` | `/run/wg-admin` (ro) | Unix socket wg-admin |
 | `/var/lib/wg/clients` | `/var/lib/wg/clients` | Client `.conf`, `.json` |
-| `/var/lib/wg/bot` | `/app/state` | `users.json`, `wg_bot_debug.log` |
+| `/var/lib/wg/bot` | `/app/state` | `users.json` (`0600` при записи), `wg_bot_debug.log` |
 | `/etc/wg-bot/config.yaml` | `/config/config.yaml` (ro) | Настройки |
 
 ---
