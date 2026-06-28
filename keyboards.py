@@ -1,7 +1,8 @@
 """Telegram keyboards and callback_data conventions.
 
 Client actions use global index into sorted client list (not name) to stay
-within Telegram callback_data 64-byte limit.
+within Telegram callback_data 64-byte limit. Use ``build_callback_data()`` for
+every dynamic callback so length is checked at keyboard build time.
 
 Callback prefixes:
   stats:{idx}             — client traffic stats
@@ -60,6 +61,38 @@ CB_USER_REMOVE_CONFIRM = "userremove:confirm"
 CB_USER_REMOVE_CANCEL = "userremove:cancel"
 
 
+CB_USER_REMOVE_CANCEL = "userremove:cancel"
+
+TELEGRAM_CALLBACK_DATA_MAX_BYTES = 64
+
+
+class CallbackDataTooLongError(ValueError):
+    """callback_data exceeds Telegram Bot API limit (64 bytes UTF-8)."""
+
+
+def build_callback_data(*parts: str) -> str:
+    """Join parts with ``:`` and enforce Telegram's 64-byte callback_data limit."""
+    data = ":".join(str(p) for p in parts)
+    size = len(data.encode("utf-8"))
+    if size > TELEGRAM_CALLBACK_DATA_MAX_BYTES:
+        raise CallbackDataTooLongError(
+            f"callback_data is {size} bytes "
+            f"(max {TELEGRAM_CALLBACK_DATA_MAX_BYTES}): {data!r}"
+        )
+    return data
+
+
+def validate_callback_data(data: str) -> str:
+    """Validate a pre-built callback string (e.g. static prefix constants)."""
+    size = len(data.encode("utf-8"))
+    if size > TELEGRAM_CALLBACK_DATA_MAX_BYTES:
+        raise CallbackDataTooLongError(
+            f"callback_data is {size} bytes "
+            f"(max {TELEGRAM_CALLBACK_DATA_MAX_BYTES}): {data!r}"
+        )
+    return data
+
+
 def parse_callback_index(data: str, prefix: str) -> int:
     """Extract integer index from callback_data like ``prefix:42``."""
     suffix = data[len(prefix) + 1 :]
@@ -83,16 +116,21 @@ def main_menu(is_admin: bool) -> ReplyKeyboardMarkup:
 def client_actions_keyboard(idx: int, *, is_admin: bool) -> InlineKeyboardMarkup:
     """Inline actions for a single client row in /listclients."""
     row = [
-        InlineKeyboardButton(text="📊 Статистика", callback_data=f"{CB_STATS}:{idx}")
+        InlineKeyboardButton(
+            text="📊 Статистика",
+            callback_data=build_callback_data(CB_STATS, idx),
+        )
     ]
     if is_admin:
         row.extend(
             [
                 InlineKeyboardButton(
-                    text="🔄 Ротация", callback_data=f"{CB_ROTATE_ASK}:{idx}"
+                    text="🔄 Ротация",
+                    callback_data=build_callback_data(CB_ROTATE_ASK, idx),
                 ),
                 InlineKeyboardButton(
-                    text="🗑 Удалить", callback_data=f"{CB_REMOVE_ASK}:{idx}"
+                    text="🗑 Удалить",
+                    callback_data=build_callback_data(CB_REMOVE_ASK, idx),
                 ),
             ]
         )
@@ -105,10 +143,10 @@ def rotate_confirm_keyboard(idx: int) -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(
                     text="✅ Подтвердить",
-                    callback_data=f"{CB_ROTATE_CONFIRM}:{idx}",
+                    callback_data=build_callback_data(CB_ROTATE_CONFIRM, idx),
                 ),
                 InlineKeyboardButton(
-                    text="❌ Отмена", callback_data=CB_ROTATE_CANCEL
+                    text="❌ Отмена", callback_data=validate_callback_data(CB_ROTATE_CANCEL)
                 ),
             ]
         ]
@@ -120,10 +158,11 @@ def remove_confirm_keyboard(idx: int) -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="✅ Удалить", callback_data=f"{CB_REMOVE_CONFIRM}:{idx}"
+                    text="✅ Удалить",
+                    callback_data=build_callback_data(CB_REMOVE_CONFIRM, idx),
                 ),
                 InlineKeyboardButton(
-                    text="❌ Отмена", callback_data=CB_REMOVE_CANCEL
+                    text="❌ Отмена", callback_data=validate_callback_data(CB_REMOVE_CANCEL)
                 ),
             ]
         ]
@@ -138,18 +177,21 @@ def clients_pagination_keyboard(page: int, total_pages: int) -> InlineKeyboardMa
     if page > 0:
         row.append(
             InlineKeyboardButton(
-                text="◀️ Назад", callback_data=f"{CB_CLIENTS_PAGE}:{page - 1}"
+                text="◀️ Назад",
+                callback_data=build_callback_data(CB_CLIENTS_PAGE, page - 1),
             )
         )
     row.append(
         InlineKeyboardButton(
-            text=f"{page + 1}/{total_pages}", callback_data=f"{CB_CLIENTS_PAGE}:{page}"
+            text=f"{page + 1}/{total_pages}",
+            callback_data=build_callback_data(CB_CLIENTS_PAGE, page),
         )
     )
     if page < total_pages - 1:
         row.append(
             InlineKeyboardButton(
-                text="▶️ Вперёд", callback_data=f"{CB_CLIENTS_PAGE}:{page + 1}"
+                text="▶️ Вперёд",
+                callback_data=build_callback_data(CB_CLIENTS_PAGE, page + 1),
             )
         )
     return InlineKeyboardMarkup(inline_keyboard=[row])
@@ -160,7 +202,8 @@ def add_client_cancel_keyboard() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="❌ Отмена", callback_data=CB_ADDCLIENT_CANCEL
+                    text="❌ Отмена",
+                    callback_data=validate_callback_data(CB_ADDCLIENT_CANCEL),
                 )
             ]
         ]
@@ -176,7 +219,7 @@ def operator_row_keyboard(user_id: int, role: str) -> Optional[InlineKeyboardMar
             [
                 InlineKeyboardButton(
                     text="🗑 Удалить",
-                    callback_data=f"{CB_USER_REMOVE_ASK}:{user_id}",
+                    callback_data=build_callback_data(CB_USER_REMOVE_ASK, user_id),
                 )
             ]
         ]
@@ -189,7 +232,7 @@ def operators_footer_keyboard() -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(
                     text="➕ Добавить оператора",
-                    callback_data=CB_USER_ADD_START,
+                    callback_data=validate_callback_data(CB_USER_ADD_START),
                 )
             ]
         ]
@@ -201,7 +244,8 @@ def add_user_cancel_keyboard() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="❌ Отмена", callback_data=CB_USER_ADD_CANCEL
+                    text="❌ Отмена",
+                    callback_data=validate_callback_data(CB_USER_ADD_CANCEL),
                 )
             ]
         ]
@@ -234,16 +278,17 @@ def add_user_role_keyboard(user_id: int) -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(
                     text="admin",
-                    callback_data=f"{CB_USER_ADD_ROLE}:{user_id}:admin",
+                    callback_data=build_callback_data(CB_USER_ADD_ROLE, user_id, "admin"),
                 ),
                 InlineKeyboardButton(
                     text="user",
-                    callback_data=f"{CB_USER_ADD_ROLE}:{user_id}:user",
+                    callback_data=build_callback_data(CB_USER_ADD_ROLE, user_id, "user"),
                 ),
             ],
             [
                 InlineKeyboardButton(
-                    text="❌ Отмена", callback_data=CB_USER_ADD_CANCEL
+                    text="❌ Отмена",
+                    callback_data=validate_callback_data(CB_USER_ADD_CANCEL),
                 )
             ],
         ]
@@ -256,11 +301,34 @@ def operator_remove_confirm_keyboard(user_id: int) -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(
                     text="✅ Удалить",
-                    callback_data=f"{CB_USER_REMOVE_CONFIRM}:{user_id}",
+                    callback_data=build_callback_data(CB_USER_REMOVE_CONFIRM, user_id),
                 ),
                 InlineKeyboardButton(
-                    text="❌ Отмена", callback_data=CB_USER_REMOVE_CANCEL
+                    text="❌ Отмена",
+                    callback_data=validate_callback_data(CB_USER_REMOVE_CANCEL),
                 ),
             ]
         ]
     )
+
+
+_CALLBACK_PREFIXES = (
+    CB_STATS,
+    CB_ROTATE_ASK,
+    CB_ROTATE_CONFIRM,
+    CB_ROTATE_CANCEL,
+    CB_REMOVE_ASK,
+    CB_REMOVE_CONFIRM,
+    CB_REMOVE_CANCEL,
+    CB_CLIENTS_PAGE,
+    CB_ADDCLIENT_CANCEL,
+    CB_USER_ADD_START,
+    CB_USER_ADD_CANCEL,
+    CB_USER_ADD_ROLE,
+    CB_USER_REMOVE_ASK,
+    CB_USER_REMOVE_CONFIRM,
+    CB_USER_REMOVE_CANCEL,
+)
+
+for _prefix in _CALLBACK_PREFIXES:
+    validate_callback_data(_prefix)

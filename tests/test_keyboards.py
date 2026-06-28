@@ -1,3 +1,5 @@
+import pytest
+
 from keyboards import (
     BTN_ADD_CLIENT,
     BTN_PICK_USER,
@@ -5,10 +7,13 @@ from keyboards import (
     CB_STATS,
     CB_USER_ADD_ROLE,
     CB_USER_REMOVE_ASK,
+    CallbackDataTooLongError,
+    TELEGRAM_CALLBACK_DATA_MAX_BYTES,
     add_client_cancel_keyboard,
     add_user_cancel_keyboard,
     add_user_pick_keyboard,
     add_user_role_keyboard,
+    build_callback_data,
     client_actions_keyboard,
     clients_pagination_keyboard,
     main_menu,
@@ -18,6 +23,7 @@ from keyboards import (
     parse_callback_index,
     remove_confirm_keyboard,
     rotate_confirm_keyboard,
+    validate_callback_data,
 )
 
 
@@ -50,10 +56,27 @@ def test_callbacks_fit_telegram_limit():
     for kb in inline_keyboards:
         for row in kb.inline_keyboard:
             for btn in row:
-                assert len(btn.callback_data.encode("utf-8")) <= 64
+                assert (
+                    len(btn.callback_data.encode("utf-8"))
+                    <= TELEGRAM_CALLBACK_DATA_MAX_BYTES
+                )
 
     pick_kb = add_user_pick_keyboard()
     assert pick_kb.keyboard[0][0].request_users.request_id == 1
+
+
+def test_build_callback_data_within_limit():
+    data = build_callback_data("remove:confirm", "a" * 40)
+    assert len(data.encode("utf-8")) <= TELEGRAM_CALLBACK_DATA_MAX_BYTES
+
+
+def test_build_callback_data_raises_when_too_long():
+    with pytest.raises(CallbackDataTooLongError, match="65 bytes"):
+        build_callback_data("remove:confirm", "x" * 50)
+
+
+def test_validate_callback_data_accepts_short_string():
+    assert validate_callback_data("rotate:cancel") == "rotate:cancel"
 
 
 def test_clients_pagination_single_page_returns_none():
