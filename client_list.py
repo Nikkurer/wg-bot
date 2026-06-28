@@ -11,7 +11,7 @@ WG_PUBKEY_LEN = 44
 
 
 def sort_clients(clients: List[dict]) -> List[dict]:
-    return sorted(clients, key=lambda c: c["name"])
+    return sorted(clients, key=lambda c: c.get("display_name", c["name"]))
 
 
 def paginate_clients(
@@ -34,6 +34,9 @@ def client_by_pubkey(clients: List[dict], pubkey: str) -> Optional[dict]:
 
 def client_by_name(clients: List[dict], name: str) -> Optional[dict]:
     for c in clients:
-        if c["name"] == name:
+        if c.get("display_name", c["name"]) == name:
+            return c
+        storage = c.get("storage_name")
+        if storage and storage == name:
             return c
     return None

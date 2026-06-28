@@ -138,14 +138,13 @@ class ClientService:
         result = []
         for name, rec in local.items():
             peer = by_desc.get(name) or by_pub.get(rec.pubkey)
-            result.append(_merge_client(name, rec, peer))
+            result.append(_merge_client(rec, peer))
             seen.add(rec.pubkey)
 
         for peer in peers:
             if peer.public_key in seen:
                 continue
-            name = peer.description or peer.public_key[:8] + "..."
-            result.append(_merge_client(name, None, peer))
+            result.append(_merge_client(None, peer))
 
         return result
 
@@ -157,15 +156,34 @@ class ClientService:
         raise ClientServiceError("Peer not found after add")
 
 
-def _merge_client(name: str, local: Optional[ClientRecord], peer: Optional[PeerInfo]) -> dict:
+def _orphan_display_name(peer: PeerInfo) -> str:
+    if peer.description:
+        return peer.description
+    return peer.public_key[:8] + "..."
+
+
+def _merge_client(local: Optional[ClientRecord], peer: Optional[PeerInfo]) -> dict:
+    pubkey = local.pubkey if local else (peer.public_key if peer else "")
+    if local:
+        display_name = local.name
+        storage_name = local.name
+        has_local_conf = True
+    else:
+        assert peer is not None
+        display_name = _orphan_display_name(peer)
+        storage_name = None
+        has_local_conf = False
+
     return {
-        "name": name,
+        "name": display_name,
+        "display_name": display_name,
+        "storage_name": storage_name,
         "ip": local.client_ip if local else (peer.allowed_ips[0] if peer and peer.allowed_ips else ""),
         "ip_v6": local.client_ip_v6 if local else "",
-        "pubkey": (local.pubkey if local else peer.public_key if peer else ""),
+        "pubkey": pubkey,
         "endpoint": peer.endpoint if peer else "",
         "latest_handshake": peer.latest_handshake if peer else None,
         "transfer_rx": peer.transfer_rx if peer else 0,
         "transfer_tx": peer.transfer_tx if peer else 0,
-        "has_local_conf": local is not None,
+        "has_local_conf": has_local_conf,
     }

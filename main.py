@@ -397,12 +397,13 @@ async def find_client_by_pubkey(service: ClientService, pubkey: str) -> dict | N
 
 
 def format_client_card(c: dict) -> str:
+    label = c.get("display_name", c["name"])
     ip_display = c["ip"]
     if c.get("ip_v6"):
         ip_display = f"{c['ip']}, {c['ip_v6']}"
     local_mark = "" if c.get("has_local_conf") else " ⚠️ no local conf"
     return (
-        f"• {c['name']} — {ip_display} "
+        f"• {label} — {ip_display} "
         f"(pubkey: {c['pubkey'][:8]}...){local_mark}\n"
     )
 
@@ -443,7 +444,7 @@ async def prompt_rotate(message: Message, service: ClientService, pubkey: str):
     if not client:
         await message.answer("Client not found.")
         return
-    name = client["name"]
+    name = client.get("display_name", client["name"])
     await message.answer(
         f"⚠️ Ротация ключей для клиента '{name}'?\n\n"
         "После подтверждения старый .conf и QR перестанут работать.",
@@ -457,7 +458,7 @@ async def prompt_remove(message: Message, service: ClientService, pubkey: str):
     if not client:
         await message.answer("Client not found.")
         return
-    name = client["name"]
+    name = client.get("display_name", client["name"])
     await message.answer(
         f"⚠️ Удалить клиента '{name}'?\n\n"
         "Peer будет снят с сервера, локальные файлы удалены.",
@@ -505,7 +506,7 @@ async def cb_stats(callback: CallbackQuery, service: ClientService, um: UserMana
         if not client:
             await callback.answer("Client not found.", show_alert=True)
             return
-        name = client["name"]
+        name = client.get("display_name", client["name"])
         ip_display = client["ip"]
         if client.get("ip_v6"):
             ip_display = f"{client['ip']}, {client['ip_v6']}"
@@ -779,7 +780,7 @@ async def cb_rotate(callback: CallbackQuery, service: ClientService, um: UserMan
     if not client:
         await callback.answer("Client not found.", show_alert=True)
         return
-    name = client["name"]
+    name = client.get("display_name", client["name"])
     try:
         res = await service.rotate_client(name)
         await callback.message.edit_text(
@@ -825,7 +826,7 @@ async def cb_remove(callback: CallbackQuery, service: ClientService, um: UserMan
     if not client:
         await callback.answer("Client not found.", show_alert=True)
         return
-    name = client["name"]
+    name = client.get("display_name", client["name"])
     try:
         await service.delete_client(name)
         await callback.message.edit_text(f"✅ Client '{name}' removed.")

@@ -120,7 +120,22 @@ class TestClientService:
         assert "priv2" in result.conf_text
 
     @pytest.mark.asyncio
-    async def test_list_clients_merged(self, service, wg_admin):
+    async def test_list_clients_merged_orphan_invalid_description(self, service, wg_admin):
+        wg_admin.list_peers.return_value = [
+            PeerInfo(
+                public_key="orphanpub",
+                allowed_ips=["10.66.66.99/32"],
+                description="../state/users",
+            )
+        ]
+        items = await service.list_clients_merged()
+        assert len(items) == 1
+        assert items[0]["display_name"] == "../state/users"
+        assert items[0]["storage_name"] is None
+        assert items[0]["has_local_conf"] is False
+
+    @pytest.mark.asyncio
+    async def test_list_clients_merged_local_has_storage_name(self, service, wg_admin):
         wg_admin.list_peers.side_effect = [
             [PeerInfo(public_key="pub", allowed_ips=["10.66.66.10/32"], description="eve")],
             [
@@ -139,6 +154,8 @@ class TestClientService:
         items = await service.list_clients_merged()
         assert len(items) == 1
         assert items[0]["name"] == "eve"
+        assert items[0]["display_name"] == "eve"
+        assert items[0]["storage_name"] == "eve"
         assert items[0]["transfer_rx"] == 100
 
     @pytest.mark.asyncio

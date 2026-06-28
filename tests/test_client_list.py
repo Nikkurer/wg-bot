@@ -21,6 +21,8 @@ def _clients(names):
     return [
         {
             "name": n,
+            "display_name": n,
+            "storage_name": n,
             "ip": f"10.0.0.{i}",
             "pubkey": pubkeys.get(n, SAMPLE_PUBKEY),
         }
