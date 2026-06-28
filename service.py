@@ -80,22 +80,31 @@ class ClientService:
         self.logger.info("Created client %s with IP %s", name, client_ip)
         return CreateClientResult(record=record, conf_text=conf_text)
 
-    async def delete_client(self, name: str) -> None:
-        self.clients.validate_name(name)
-        record = self.clients.load_client(name)
+    async def delete_client(self, client: dict) -> None:
+        pubkey = client["pubkey"]
+        storage_name = client.get("storage_name")
+        if storage_name:
+            self.clients.validate_name(storage_name)
+            record = self.clients.load_client(storage_name)
+            if record.pubkey != pubkey:
+                raise ClientServiceError("Client pubkey mismatch")
         try:
-            await self.wg_admin.remove_peer(record.pubkey)
+            await self.wg_admin.remove_peer(pubkey)
         except WgAdminError as e:
             raise ClientServiceError(f"Failed to remove peer on server: {e}") from e
-        try:
-            self.clients.remove_client_files(name)
-        except ClientManagerError as e:
-            raise ClientServiceError(f"Failed to remove client files: {e}") from e
-        self.logger.info("Removed client %s", name)
+        if storage_name:
+            try:
+                self.clients.remove_client_files(storage_name)
+            except ClientManagerError as e:
+                raise ClientServiceError(f"Failed to remove client files: {e}") from e
+        self.logger.info(
+            "Removed client %s",
+            storage_name or client.get("display_name", pubkey[:8]),
+        )
 
-    async def rotate_client(self, name: str) -> CreateClientResult:
-        self.clients.validate_name(name)
-        record = self.clients.load_client(name)
+    async def rotate_client(self, storage_name: str) -> CreateClientResult:
+        self.clients.validate_name(storage_name)
+        record = self.clients.load_client(storage_name)
         old_pub = record.pubkey
         priv, new_pub = self.clients.generate_keypair()
 
@@ -108,11 +117,11 @@ class ClientService:
             conf_text = self.clients.build_client_conf(
                 priv, record.client_ip, record.client_ip_v6
             )
-            updated = self.clients.update_client_after_rotate(name, new_pub, conf_text)
+            updated = self.clients.update_client_after_rotate(storage_name, new_pub, conf_text)
         except Exception as e:
             self.logger.critical(
                 "Client %s rotated on server (pubkey=%s...) but conf save failed: %s",
-                name,
+                storage_name,
                 new_pub[:8],
                 e,
             )
@@ -120,7 +129,7 @@ class ClientService:
                 f"Peer rotated on server but failed to save new conf — manual reissue required"
             ) from e
 
-        self.logger.info("Rotated keys for client %s", name)
+        self.logger.info("Rotated keys for client %s", storage_name)
         return CreateClientResult(record=updated, conf_text=conf_text)
 
     async def list_clients_merged(self) -> List[dict]:

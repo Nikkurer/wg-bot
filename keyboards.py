@@ -115,7 +115,9 @@ def main_menu(is_admin: bool) -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
-def client_actions_keyboard(pubkey: str, *, is_admin: bool) -> InlineKeyboardMarkup:
+def client_actions_keyboard(
+    pubkey: str, *, is_admin: bool, has_local_conf: bool = True
+) -> InlineKeyboardMarkup:
     """Inline actions for a single client row in /listclients."""
     row = [
         InlineKeyboardButton(
@@ -124,17 +126,18 @@ def client_actions_keyboard(pubkey: str, *, is_admin: bool) -> InlineKeyboardMar
         )
     ]
     if is_admin:
-        row.extend(
-            [
+        if has_local_conf:
+            row.append(
                 InlineKeyboardButton(
                     text="🔄 Ротация",
                     callback_data=build_callback_data(CB_ROTATE_ASK, pubkey),
-                ),
-                InlineKeyboardButton(
-                    text="🗑 Удалить",
-                    callback_data=build_callback_data(CB_REMOVE_ASK, pubkey),
-                ),
-            ]
+                )
+            )
+        row.append(
+            InlineKeyboardButton(
+                text="🗑 Удалить",
+                callback_data=build_callback_data(CB_REMOVE_ASK, pubkey),
+            )
         )
     return InlineKeyboardMarkup(inline_keyboard=[row])
 

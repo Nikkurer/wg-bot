@@ -86,7 +86,13 @@ class TestClientService:
     @pytest.mark.asyncio
     async def test_delete_client_rejects_invalid_name(self, service):
         with pytest.raises(ClientManagerError, match="Invalid"):
-            await service.delete_client("../state/users")
+            await service.delete_client(
+                {
+                    "pubkey": "pub",
+                    "storage_name": "../state/users",
+                    "has_local_conf": True,
+                }
+            )
 
     @pytest.mark.asyncio
     async def test_delete_client(self, service, wg_admin):
@@ -97,9 +103,23 @@ class TestClientService:
             service.clients, "generate_keypair", return_value=("priv", "pub")
         ):
             await service.create_client("carol")
-        await service.delete_client("carol")
+        items = await service.list_clients_merged()
+        await service.delete_client(items[0])
         wg_admin.remove_peer.assert_awaited_with("pub")
         assert not service.clients.name_exists("carol")
+
+    @pytest.mark.asyncio
+    async def test_delete_orphan_peer_without_local_files(self, service, wg_admin):
+        wg_admin.list_peers.return_value = [
+            PeerInfo(
+                public_key="orphanpub",
+                allowed_ips=["10.66.66.99/32"],
+                description="../state/users",
+            )
+        ]
+        items = await service.list_clients_merged()
+        await service.delete_client(items[0])
+        wg_admin.remove_peer.assert_awaited_once_with("orphanpub")
 
     @pytest.mark.asyncio
     async def test_rotate_client(self, service, wg_admin):

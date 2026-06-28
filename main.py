@@ -426,7 +426,9 @@ async def send_clients_page(
     for c in page_clients:
         await message.answer(
             format_client_card(c),
-            reply_markup=client_actions_keyboard(c["pubkey"], is_admin=is_admin),
+            reply_markup=client_actions_keyboard(
+                c["pubkey"], is_admin=is_admin, has_local_conf=c.get("has_local_conf", True)
+            ),
         )
 
     nav = clients_pagination_keyboard(page, total_pages)
@@ -445,6 +447,11 @@ async def prompt_rotate(message: Message, service: ClientService, pubkey: str):
         await message.answer("Client not found.")
         return
     name = client.get("display_name", client["name"])
+    if not client.get("has_local_conf") or not client.get("storage_name"):
+        await message.answer(
+            f"⚠️ У клиента '{name}' нет локального conf — ротация недоступна."
+        )
+        return
     await message.answer(
         f"⚠️ Ротация ключей для клиента '{name}'?\n\n"
         "После подтверждения старый .conf и QR перестанут работать.",
@@ -459,9 +466,13 @@ async def prompt_remove(message: Message, service: ClientService, pubkey: str):
         await message.answer("Client not found.")
         return
     name = client.get("display_name", client["name"])
+    files_note = (
+        "Peer будет снят с сервера, локальные файлы удалены."
+        if client.get("has_local_conf")
+        else "Peer будет снят с сервера (локальных файлов нет)."
+    )
     await message.answer(
-        f"⚠️ Удалить клиента '{name}'?\n\n"
-        "Peer будет снят с сервера, локальные файлы удалены.",
+        f"⚠️ Удалить клиента '{name}'?\n\n{files_note}",
         reply_markup=remove_confirm_keyboard(pubkey),
     )
 
@@ -781,8 +792,13 @@ async def cb_rotate(callback: CallbackQuery, service: ClientService, um: UserMan
         await callback.answer("Client not found.", show_alert=True)
         return
     name = client.get("display_name", client["name"])
+    if not client.get("has_local_conf") or not client.get("storage_name"):
+        await callback.answer(
+            "Нет локального conf — ротация недоступна.", show_alert=True
+        )
+        return
     try:
-        res = await service.rotate_client(name)
+        res = await service.rotate_client(client["storage_name"])
         await callback.message.edit_text(
             f"✅ Ключи клиента '{name}' обновлены.\n"
             "⚠️ Старый .conf недействителен — используйте новый файл и QR ниже."
@@ -828,7 +844,7 @@ async def cb_remove(callback: CallbackQuery, service: ClientService, um: UserMan
         return
     name = client.get("display_name", client["name"])
     try:
-        await service.delete_client(name)
+        await service.delete_client(client)
         await callback.message.edit_text(f"✅ Client '{name}' removed.")
         await callback.answer()
     except ClientServiceError as e:

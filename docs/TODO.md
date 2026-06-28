@@ -22,25 +22,15 @@
 
 ### 2. Path traversal через имена клиентов
 
-**Файлы:** `client_manager.py`, `service.py` (`list_clients_merged`)
+**Fix:** validate_name + realpath + display_name/storage_name + orphan delete по pubkey.
 
-**Проблема:** `validate_name()` только при создании. Имена из wg-admin `peer.description` используются как ключ ФС без проверки. Description вроде `../state/users` даёт путь вне `CLIENT_DIR`.
-
-**Fix:** `validate_name()` на всех входах (load, delete, rotate, slash); для orphan peer с невалидным description — sanitized label, не использовать как путь; `realpath` под `client_dir`.
-
-**Статус:** `[ ]`
+**Статус:** `[x]` — сделано (коммиты A/B/C/D)
 
 ---
 
 ### 3. Доверие к `conf_path` из JSON-метаданных
 
-**Файлы:** `client_manager.py` (`load_client`, `update_client_after_rotate`, `remove_client_files`)
-
-**Проблема:** `conf_path` читается из `.json` без проверки, что путь внутри `CLIENT_DIR`. Подмена meta → read/write/delete произвольных файлов.
-
-**Fix:** всегда вычислять путь через `_conf_path(name)` после валидации имени; stored `conf_path` игнорировать или проверять через `realpath`.
-
-**Статус:** `[ ]`
+**Статус:** `[x]` — сделано в коммите A (`_conf_path(name)` вместо meta)
 
 ---
 

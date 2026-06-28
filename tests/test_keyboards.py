@@ -47,6 +47,13 @@ def test_client_actions_viewer_has_stats_only():
     assert kb.inline_keyboard[0][0].callback_data == f"{CB_STATS}:{SAMPLE_PUBKEY}"
 
 
+def test_client_actions_admin_orphan_has_remove_only():
+    kb = client_actions_keyboard(SAMPLE_PUBKEY, is_admin=True, has_local_conf=False)
+    assert len(kb.inline_keyboard[0]) == 2
+    callbacks = [btn.callback_data for btn in kb.inline_keyboard[0]]
+    assert callbacks == [f"stats:{SAMPLE_PUBKEY}", f"remove:ask:{SAMPLE_PUBKEY}"]
+
+
 def test_client_actions_admin_has_rotate_and_remove():
     kb = client_actions_keyboard(SAMPLE_PUBKEY, is_admin=True)
     assert len(kb.inline_keyboard[0]) == 3
