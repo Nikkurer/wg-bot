@@ -13,7 +13,9 @@ from typing import Optional
 import qrcode
 from aiogram import Bot, Dispatcher, F
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.filters import Command, CommandObject
+from aiogram.filters import Command, CommandObject, StateFilter
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import (
     BotCommand,
     BotCommandScopeChat,
@@ -24,26 +26,31 @@ from aiogram.types import (
     Message,
 )
 from bootstrap import enrich_from_wg_admin
+from client_manager import ClientManagerError
 from config import BotConfig, ConfigError, load_config
 from keyboards import (
     ADMIN_MENU_BUTTONS,
+    BTN_ADD_CLIENT,
     BTN_CLIENTS,
     BTN_DRIFT,
     BTN_HELP,
     BTN_OPERATORS,
     BTN_STATUS,
+    CB_ADDCLIENT_CANCEL,
     CB_REMOVE_ASK,
     CB_REMOVE_CANCEL,
     CB_REMOVE_CONFIRM,
     CB_ROTATE_ASK,
     CB_ROTATE_CANCEL,
     CB_ROTATE_CONFIRM,
+    add_client_cancel_keyboard,
     client_actions_keyboard,
     main_menu,
     remove_confirm_keyboard,
     rotate_confirm_keyboard,
 )
 from service import ClientService, ClientServiceError
+from states import AddClientStates
 from users import UserManager
 from wg_admin_client import DriftReport, WgAdminClient, WgAdminError
 
@@ -219,6 +226,37 @@ async def send_client_conf_and_qr(
     await message.answer_photo(photo=photo_file, caption=f"QR для клиента '{name}'")
 
 
+async def create_and_send_client(
+    message: Message, name: str, service: ClientService
+) -> None:
+    """Создаёт клиента и отправляет .conf + QR."""
+    try:
+        res = await service.create_client(name)
+        await send_client_conf_and_qr(
+            message,
+            name,
+            res.record.conf_path,
+            res.conf_text,
+            res.record.client_ip,
+        )
+    except ClientServiceError as e:
+        infoLog.error("ClientServiceError: %s", e)
+        await message.answer("Ошибка при добавлении клиента.")
+    except Exception as e:
+        infoLog.error("Unexpected error: %s", traceback.format_exc())
+        await message.answer(f"Unexpected error: {e}")
+
+
+async def prompt_add_client(message: Message, state: FSMContext):
+    """Запускает диалог добавления клиента (FSM)."""
+    await state.set_state(AddClientStates.waiting_for_name)
+    await message.answer(
+        "Введите имя нового клиента.\n"
+        "Допустимы: латиница, цифры, `-`, `_` (например: `alice` или `phone-2`).",
+        reply_markup=add_client_cancel_keyboard(),
+    )
+
+
 # Команды для обычных пользователей (роль user) и всех незарегистрированных.
 VIEWER_COMMANDS = [
     BotCommand(command="status", description="Показать статус WireGuard"),
@@ -276,6 +314,7 @@ async def cmd_start(message: Message, um: UserManager):
 
 async def handle_menu(
     message: Message,
+    state: FSMContext,
     wg_admin: WgAdminClient,
     cfg: BotConfig,
     service: ClientService,
@@ -287,12 +326,20 @@ async def handle_menu(
         return
 
     text = message.text
+    if text != BTN_ADD_CLIENT:
+        await state.clear()
+
     if text == BTN_STATUS:
         await cmd_status(message, wg_admin, cfg, um)
     elif text == BTN_CLIENTS:
         await cmd_listclients(message, service, um)
     elif text == BTN_HELP:
         await cmd_help(message, um)
+    elif text == BTN_ADD_CLIENT:
+        if not um.is_admin(message.from_user.id):
+            await message.answer("Access denied.")
+            return
+        await prompt_add_client(message, state)
     elif text == BTN_DRIFT:
         await cmd_drift(message, wg_admin, um)
     elif text == BTN_OPERATORS:
@@ -369,6 +416,7 @@ async def cmd_help(message: Message, um: UserManager):
     ]
     if um.is_admin(message.from_user.id):
         lines += [
+            f"  {BTN_ADD_CLIENT} — создать нового клиента",
             f"  {BTN_DRIFT} — проверка drift wg-admin vs WireGuard",
             f"  {BTN_OPERATORS} — список операторов",
             "",
@@ -438,24 +486,51 @@ async def cmd_addclient(
         await message.answer("Access denied.")
         return
     if not command.args:
-        await message.answer("Usage: /addclient <name>")
+        await message.answer(
+            f"Usage: /addclient <name>\n"
+            f"Или нажмите {BTN_ADD_CLIENT} в меню."
+        )
         return
     name = command.args.strip()
+    await create_and_send_client(message, name, service)
+
+
+async def fsm_addclient_name(
+    message: Message,
+    state: FSMContext,
+    service: ClientService,
+    um: UserManager,
+):
+    """Принимает имя клиента в диалоге добавления."""
+    if not um.is_admin(message.from_user.id):
+        await state.clear()
+        await message.answer("Access denied.")
+        return
+
+    name = message.text.strip()
     try:
-        res = await service.create_client(name)
-        await send_client_conf_and_qr(
-            message,
-            name,
-            res.record.conf_path,
-            res.conf_text,
-            res.record.client_ip,
+        service.clients.validate_name(name)
+    except ClientManagerError:
+        await message.answer(
+            "Неверное имя. Допустимы: латиница, цифры, `-`, `_`.\n"
+            "Попробуйте ещё раз или нажмите ❌ Отмена."
         )
-    except ClientServiceError as e:
-        infoLog.error("ClientServiceError: %s", e)
-        await message.answer("Ошибка при добавлении клиента.")
-    except Exception as e:
-        infoLog.error(f"Unexpected error: {traceback.format_exc()}")
-        await message.answer(f"Unexpected error: {e}")
+        return
+
+    await state.clear()
+    await create_and_send_client(message, name, service)
+
+
+async def cb_addclient_cancel(
+    callback: CallbackQuery, state: FSMContext, um: UserManager
+):
+    """Отмена диалога добавления клиента."""
+    if not um.is_admin(callback.from_user.id):
+        await callback.answer("Access denied.", show_alert=True)
+        return
+    await state.clear()
+    await callback.message.edit_text("Добавление клиента отменено.")
+    await callback.answer()
 
 
 async def cmd_removeclient(
@@ -734,7 +809,7 @@ async def main():
     service = ClientService(bot_cfg, wg_admin)
 
     bot = Bot(token=bot_cfg.telegram_token)
-    dp = Dispatcher()
+    dp = Dispatcher(storage=MemoryStorage())
 
     dp.message.register(partial(cmd_start, um=um), Command("start"))
     dp.message.register(partial(cmd_help, um=um), Command("help"))
@@ -756,6 +831,12 @@ async def main():
     dp.message.register(partial(cmd_listusers, um=um), Command("listusers"))
     dp.message.register(partial(cmd_adduser, um=um), Command("adduser"))
     dp.message.register(partial(cmd_removeuser, um=um), Command("removeuser"))
+
+    dp.message.register(
+        partial(fsm_addclient_name, service=service, um=um),
+        StateFilter(AddClientStates.waiting_for_name),
+        F.text,
+    )
 
     dp.message.register(
         partial(
@@ -780,6 +861,9 @@ async def main():
     )
     dp.callback_query.register(
         partial(cb_remove, service=service, um=um), F.data.startswith("remove:")
+    )
+    dp.callback_query.register(
+        partial(cb_addclient_cancel, um=um), F.data == CB_ADDCLIENT_CANCEL
     )
 
     await apply_command_menus(bot, um)

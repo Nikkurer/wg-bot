@@ -8,6 +8,7 @@ Callback prefixes (max 64 bytes total in callback_data):
   remove:ask:{name}       — prompt client removal confirm
   remove:confirm:{name}   — execute client removal
   remove:cancel           — cancel removal dialog
+  addclient:cancel        — cancel add-client dialog (FSM)
 """
 
 from aiogram.types import (
@@ -21,11 +22,14 @@ from aiogram.types import (
 BTN_STATUS = "📊 Статус"
 BTN_CLIENTS = "👥 Клиенты"
 BTN_HELP = "❓ Справка"
+BTN_ADD_CLIENT = "➕ Клиент"
 BTN_DRIFT = "⚠️ Drift"
 BTN_OPERATORS = "👤 Операторы"
 
 VIEWER_MENU_BUTTONS = frozenset({BTN_STATUS, BTN_CLIENTS, BTN_HELP})
-ADMIN_MENU_BUTTONS = VIEWER_MENU_BUTTONS | frozenset({BTN_DRIFT, BTN_OPERATORS})
+ADMIN_MENU_BUTTONS = VIEWER_MENU_BUTTONS | frozenset(
+    {BTN_ADD_CLIENT, BTN_DRIFT, BTN_OPERATORS}
+)
 
 # --- Callback prefixes ---
 CB_STATS = "stats"
@@ -35,6 +39,7 @@ CB_ROTATE_CANCEL = "rotate:cancel"
 CB_REMOVE_ASK = "remove:ask"
 CB_REMOVE_CONFIRM = "remove:confirm"
 CB_REMOVE_CANCEL = "remove:cancel"
+CB_ADDCLIENT_CANCEL = "addclient:cancel"
 
 
 def main_menu(is_admin: bool) -> ReplyKeyboardMarkup:
@@ -44,6 +49,7 @@ def main_menu(is_admin: bool) -> ReplyKeyboardMarkup:
         [KeyboardButton(text=BTN_HELP)],
     ]
     if is_admin:
+        rows.append([KeyboardButton(text=BTN_ADD_CLIENT)])
         rows.append(
             [KeyboardButton(text=BTN_DRIFT), KeyboardButton(text=BTN_OPERATORS)]
         )
@@ -95,6 +101,18 @@ def remove_confirm_keyboard(name: str) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(
                     text="❌ Отмена", callback_data=CB_REMOVE_CANCEL
                 ),
+            ]
+        ]
+    )
+
+
+def add_client_cancel_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="❌ Отмена", callback_data=CB_ADDCLIENT_CANCEL
+                )
             ]
         ]
     )

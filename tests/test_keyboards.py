@@ -1,6 +1,9 @@
 from keyboards import (
+    BTN_ADD_CLIENT,
     CB_STATS,
+    add_client_cancel_keyboard,
     client_actions_keyboard,
+    main_menu,
     remove_confirm_keyboard,
     rotate_confirm_keyboard,
 )
@@ -28,8 +31,21 @@ def test_callbacks_fit_telegram_limit():
         rotate_confirm_keyboard(long_name),
         remove_confirm_keyboard(long_name),
         client_actions_keyboard(long_name, is_admin=True),
+        add_client_cancel_keyboard(),
     ]
     for kb in keyboards:
         for row in kb.inline_keyboard:
             for btn in row:
                 assert len(btn.callback_data.encode("utf-8")) <= 64
+
+
+def test_admin_main_menu_has_add_client_button():
+    kb = main_menu(is_admin=True)
+    labels = {btn.text for row in kb.keyboard for btn in row}
+    assert BTN_ADD_CLIENT in labels
+
+
+def test_viewer_main_menu_has_no_add_client_button():
+    kb = main_menu(is_admin=False)
+    labels = {btn.text for row in kb.keyboard for btn in row}
+    assert BTN_ADD_CLIENT not in labels
